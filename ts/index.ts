@@ -1,0 +1,149 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+import { NativeModules, TurboModuleRegistry } from 'react-native';
+
+export interface QCore {
+  generateSeed?(): string;
+  mnemonicFromSeed(seedHex: string): string;
+  seedFromMnemonic(phrase: string): string;
+  address(seedHex: string, index: bigint): string;
+  valid_address(address: string): boolean;
+  sign_transfer(
+    seedHex: string,
+    index: bigint,
+    to: string,
+    amount: string,
+    nonce: bigint,
+    fee: string,
+    chainId: bigint,
+  ): string;
+  sign_call(
+    seedHex: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    chainId: bigint,
+  ): string;
+  signRegister(seedHex: string, index: bigint, nonce: bigint, fee: string, chainId: bigint): string;
+  chainIdFromName(name: string): bigint;
+}
+
+interface QcoreNative {
+  mnemonicFromSeed(seedHex: string): string;
+  seedFromMnemonic(phrase: string): string;
+  address(seedHex: string, index: string): string;
+  validAddress(address: string): boolean;
+  signTransfer(
+    seedHex: string,
+    index: string,
+    to: string,
+    amount: string,
+    nonce: string,
+    fee: string,
+    chainId: string,
+  ): string;
+  signCall(
+    seedHex: string,
+    index: string,
+    target: string,
+    argsHex: string,
+    nonce: string,
+    meterLimit: string,
+    fee: string,
+    chainId: string,
+  ): string;
+  signRegister(
+    seedHex: string,
+    index: string,
+    nonce: string,
+    fee: string,
+    chainId: string,
+  ): string;
+  chainIdFromName(name: string): string;
+}
+
+const LINKING_ERROR =
+  "The '@quantovainc/react-native-qcore' native module is not available. Rebuild the app after " +
+  'adding the package so the Quantova client core is linked on device.';
+
+function resolveNative(): QcoreNative {
+  const turbo =
+    typeof TurboModuleRegistry !== 'undefined' && TurboModuleRegistry
+      ? (TurboModuleRegistry.get('Qcore') as unknown as QcoreNative | null)
+      : null;
+  const legacy = (NativeModules && (NativeModules.Qcore as unknown as QcoreNative)) || null;
+  const found = turbo || legacy;
+  if (found) return found;
+  return new Proxy({} as QcoreNative, {
+    get() {
+      throw new Error(LINKING_ERROR);
+    },
+  });
+}
+
+const native = resolveNative();
+
+const u64 = (value: bigint): string => value.toString(10);
+
+export const nativeQCore: QCore = {
+  mnemonicFromSeed(seedHex: string): string {
+    return native.mnemonicFromSeed(seedHex);
+  },
+  seedFromMnemonic(phrase: string): string {
+    return native.seedFromMnemonic(phrase);
+  },
+  address(seedHex: string, index: bigint): string {
+    return native.address(seedHex, u64(index));
+  },
+  valid_address(address: string): boolean {
+    return native.validAddress(address);
+  },
+  sign_transfer(
+    seedHex: string,
+    index: bigint,
+    to: string,
+    amount: string,
+    nonce: bigint,
+    fee: string,
+    chainId: bigint,
+  ): string {
+    return native.signTransfer(seedHex, u64(index), to, amount, u64(nonce), fee, u64(chainId));
+  },
+  sign_call(
+    seedHex: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    chainId: bigint,
+  ): string {
+    return native.signCall(
+      seedHex,
+      u64(index),
+      target,
+      argsHex,
+      u64(nonce),
+      u64(meterLimit),
+      fee,
+      u64(chainId),
+    );
+  },
+  signRegister(seedHex: string, index: bigint, nonce: bigint, fee: string, chainId: bigint): string {
+    return native.signRegister(seedHex, u64(index), u64(nonce), fee, u64(chainId));
+  },
+  chainIdFromName(name: string): bigint {
+    return BigInt(native.chainIdFromName(name));
+  },
+};
+
+export function registerQCore(setQCore: (instance: QCore) => void): void {
+  setQCore(nativeQCore);
+}
+
+export default nativeQCore;

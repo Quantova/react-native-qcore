@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+.DS_Store
+/lib
+node_modules
+android/src/main/jniLibs
+android/src/main/java/uniffi
+ios/generated
+ios/QuantovaQcore.xcframework
+target/
+node_modules/
+android/src/main/jniLibs/
+ios/generated/
+ios/*.xcframework/

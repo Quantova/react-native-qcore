@@ -1,0 +1,62 @@
+{
+  "name": "@quantovainc/react-native-qcore",
+  "version": "0.1.0",
+  "description": "Quantova's post quantum client core for React Native. Derives Q1 keys and signs with ML-DSA-65 on device over the Rust core QCore, no wasm.",
+  "main": "ts/index.ts",
+  "module": "ts/index.ts",
+  "react-native": "ts/index.ts",
+  "source": "ts/index.ts",
+  "types": "ts/index.ts",
+  "scripts": {
+    "bindgen": "bash scripts/generate-bindings.sh",
+    "build:android": "bash scripts/build-android.sh",
+    "build:ios": "bash scripts/build-ios.sh",
+    "build:ts": "tsc -p tsconfig.json"
+  },
+  "keywords": [
+    "post-quantum",
+    "quantum-resistant",
+    "quantum-safe",
+    "react-native",
+    "blockchain",
+    "wallet",
+    "cryptography",
+    "ml-dsa",
+    "quantova",
+    "uniffi"
+  ],
+  "license": "(Apache-2.0 OR MIT)",
+  "author": "Quantova Inc",
+  "homepage": "https://github.com/Quantova/react-native-qcore#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Quantova/react-native-qcore.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Quantova/react-native-qcore/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  },
+  "files": [
+    "ts",
+    "android/build.gradle",
+    "android/src",
+    "ios/Qcore.swift",
+    "ios/Qcore.mm",
+    "ios/generated",
+    "ios/QuantovaQcore.xcframework",
+    "react-native-qcore.podspec",
+    "Cargo.toml",
+    "src",
+    "scripts",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "NOTICE",
+    "AUTHORS"
+  ]
+}

@@ -1,0 +1,60 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+buildscript {
+    ext.getExtOrDefault = { name, fallback ->
+        rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:8.6.0"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${getExtOrDefault('kotlinVersion', '1.9.24')}"
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "org.jetbrains.kotlin.android"
+
+def qcoreConfig(name, fallback) {
+    rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback
+}
+
+android {
+    namespace "com.quantova.qcore"
+    compileSdkVersion qcoreConfig("compileSdkVersion", 35)
+
+    defaultConfig {
+        minSdkVersion qcoreConfig("minSdkVersion", 24)
+        targetSdkVersion qcoreConfig("targetSdkVersion", 35)
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ["src/main/jniLibs"]
+            java.srcDirs = ["src/main/java"]
+        }
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation "com.facebook.react:react-android"
+    implementation "net.java.dev.jna:jna:5.14.0@aar"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:${qcoreConfig('kotlinVersion', '1.9.24')}"
+}

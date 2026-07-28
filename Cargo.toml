@@ -1,0 +1,28 @@
+# Copyright 2026 Quantova Inc
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+
+[package]
+name = "react-native-qcore"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+description = "The React Native binding for the Quantova post quantum client core, generated over QCore with uniffi so the QMask wallet derives keys and signs on device with no wasm."
+repository = "https://github.com/Quantova/react-native-qcore"
+
+[lib]
+name = "quantova_qcore"
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[features]
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[dependencies]
+qcore = { path = "../QCore.rs", default-features = false }
+uniffi = { version = "0.29" }
+zeroize = "1"
+thiserror = "2"
