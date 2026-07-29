@@ -50,18 +50,21 @@ fn signed_json(signed: qcore::SignedTransfer) -> String {
 
 #[uniffi::export]
 pub fn mnemonic_from_seed(seed_hex: String) -> Result<String, QcoreError> {
+    let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
     Ok(qcore::mnemonic_from_seed(&seed))
 }
 
 #[uniffi::export]
 pub fn seed_from_mnemonic(phrase: String) -> Result<String, QcoreError> {
+    let phrase = Zeroizing::new(phrase);
     let seed = Zeroizing::new(qcore::seed_from_mnemonic(&phrase).map_err(err)?);
     Ok(to_hex(&seed[..]))
 }
 
 #[uniffi::export]
 pub fn address(seed_hex: String, index: u64) -> Result<String, QcoreError> {
+    let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
     Ok(qcore::account_address(&seed, index))
 }
@@ -81,6 +84,7 @@ pub fn sign_transfer(
     fee: String,
     chain_id: u64,
 ) -> Result<String, QcoreError> {
+    let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
     let signed = qcore::sign_transfer(
         &seed,
@@ -106,6 +110,7 @@ pub fn sign_call(
     fee: String,
     chain_id: u64,
 ) -> Result<String, QcoreError> {
+    let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
     let args = from_hex(&args_hex).map_err(err)?;
     let signed = qcore::sign_call(
@@ -130,6 +135,7 @@ pub fn sign_register(
     fee: String,
     chain_id: u64,
 ) -> Result<String, QcoreError> {
+    let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
     let signed =
         qcore::sign_register(&seed, index, nonce, parse_fee(&fee)?, chain_id).map_err(err)?;
