@@ -58,7 +58,9 @@ pub fn mnemonic_from_seed(seed_hex: String) -> Result<String, QcoreError> {
 #[uniffi::export]
 pub fn seed_from_mnemonic(phrase: String) -> Result<String, QcoreError> {
     let phrase = Zeroizing::new(phrase);
-    let seed = Zeroizing::new(qcore::seed_from_mnemonic(&phrase).map_err(err)?);
+    // qcore::seed_from_mnemonic already returns a Zeroizing<[u8; SEED_LEN]> (0.1.21 secure-wipe
+    // hardening), so do NOT wrap it again — the double Zeroizing can't be indexed.
+    let seed = qcore::seed_from_mnemonic(&phrase).map_err(err)?;
     Ok(to_hex(&seed[..]))
 }
 
@@ -145,4 +147,108 @@ pub fn sign_register(
 #[uniffi::export]
 pub fn chain_id_from_name(name: String) -> u64 {
     qcore::chain_id_from_name(&name)
+}
+
+fn parse_key32(hex: &str) -> Result<[u8; 32], QcoreError> {
+    let bytes = from_hex(hex).map_err(err)?;
+    if bytes.len() != 32 {
+        return Err(err("a storage key is thirty two bytes of hex"));
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&bytes);
+    Ok(key)
+}
+
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn sign_payable_call(
+    seed_hex: String,
+    index: u64,
+    target: String,
+    args_hex: String,
+    nonce: u64,
+    meter_limit: u64,
+    fee: String,
+    value: String,
+    chain_id: u64,
+) -> Result<String, QcoreError> {
+    let seed_hex = Zeroizing::new(seed_hex);
+    let seed = parse_seed(&seed_hex)?;
+    let args = from_hex(&args_hex).map_err(err)?;
+    let signed = qcore::sign_payable_call(
+        &seed,
+        index,
+        &target,
+        args,
+        parse_amount(&value)?,
+        nonce,
+        meter_limit,
+        parse_fee(&fee)?,
+        chain_id,
+    )
+    .map_err(err)?;
+    Ok(signed_json(signed))
+}
+
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn sign_asset_call(
+    seed_hex: String,
+    index: u64,
+    target: String,
+    args_hex: String,
+    asset_issuer: String,
+    amount: String,
+    nonce: u64,
+    meter_limit: u64,
+    fee: String,
+    chain_id: u64,
+) -> Result<String, QcoreError> {
+    let seed_hex = Zeroizing::new(seed_hex);
+    let seed = parse_seed(&seed_hex)?;
+    let args = from_hex(&args_hex).map_err(err)?;
+    let signed = qcore::sign_asset_call(
+        &seed,
+        index,
+        &target,
+        args,
+        &asset_issuer,
+        parse_amount(&amount)?,
+        nonce,
+        meter_limit,
+        parse_fee(&fee)?,
+        chain_id,
+    )
+    .map_err(err)?;
+    Ok(signed_json(signed))
+}
+
+#[uniffi::export]
+pub fn name_key(label: String) -> String {
+    to_hex(&qcore::contract::name_key(&label))
+}
+
+#[uniffi::export]
+pub fn scalar_slot_key(slot: u64) -> String {
+    to_hex(&qcore::contract::scalar_slot_key(slot))
+}
+
+#[uniffi::export]
+pub fn map_slot_key(map_domain_tag: u64, key_address_hex: String) -> Result<String, QcoreError> {
+    let key = parse_key32(&key_address_hex)?;
+    Ok(to_hex(&qcore::contract::map_slot_key(map_domain_tag, &key)))
+}
+
+#[uniffi::export]
+pub fn map_addr_word_key(
+    map_domain_tag: u64,
+    key_address_hex: String,
+    word: u64,
+) -> Result<String, QcoreError> {
+    let key = parse_key32(&key_address_hex)?;
+    Ok(to_hex(&qcore::contract::map_addr_word_key(
+        map_domain_tag,
+        &key,
+        word,
+    )))
 }
