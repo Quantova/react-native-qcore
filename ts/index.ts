@@ -30,6 +30,33 @@ export interface QCore {
   ): string;
   signRegister(seedHex: string, index: bigint, nonce: bigint, fee: string, chainId: bigint): string;
   chainIdFromName(name: string): bigint;
+  signPayableCall(
+    seedHex: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    value: string,
+    chainId: bigint,
+  ): string;
+  signAssetCall(
+    seedHex: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    assetIssuer: string,
+    amount: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    chainId: bigint,
+  ): string;
+  nameKey(label: string): string;
+  mapSlotKey(mapDomainTag: bigint, keyAddressHex: string): string;
+  mapAddrWordKey(mapDomainTag: bigint, key32Hex: string, word: bigint): string;
+  scalarSlotKey(slot: bigint): string;
 }
 
 interface QcoreNative {
@@ -64,6 +91,33 @@ interface QcoreNative {
     chainId: string,
   ): string;
   chainIdFromName(name: string): string;
+  signPayableCall(
+    seedHex: string,
+    index: string,
+    target: string,
+    argsHex: string,
+    nonce: string,
+    meterLimit: string,
+    fee: string,
+    value: string,
+    chainId: string,
+  ): string;
+  signAssetCall(
+    seedHex: string,
+    index: string,
+    target: string,
+    argsHex: string,
+    assetIssuer: string,
+    amount: string,
+    nonce: string,
+    meterLimit: string,
+    fee: string,
+    chainId: string,
+  ): string;
+  nameKey(label: string): string;
+  mapSlotKey(mapDomainTag: string, keyAddressHex: string): string;
+  mapAddrWordKey(mapDomainTag: string, key32Hex: string, word: string): string;
+  scalarSlotKey(slot: string): string;
 }
 
 const LINKING_ERROR =
@@ -139,6 +193,66 @@ export const nativeQCore: QCore = {
   },
   chainIdFromName(name: string): bigint {
     return BigInt(native.chainIdFromName(name));
+  },
+  signPayableCall(
+    seedHex: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    value: string,
+    chainId: bigint,
+  ): string {
+    return native.signPayableCall(
+      seedHex,
+      u64(index),
+      target,
+      argsHex,
+      u64(nonce),
+      u64(meterLimit),
+      fee,
+      value,
+      u64(chainId),
+    );
+  },
+  signAssetCall(
+    seedHex: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    assetIssuer: string,
+    amount: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    chainId: bigint,
+  ): string {
+    return native.signAssetCall(
+      seedHex,
+      u64(index),
+      target,
+      argsHex,
+      assetIssuer,
+      amount,
+      u64(nonce),
+      u64(meterLimit),
+      fee,
+      u64(chainId),
+    );
+  },
+  nameKey(label: string): string {
+    return native.nameKey(label);
+  },
+  mapSlotKey(mapDomainTag: bigint, keyAddressHex: string): string {
+    return native.mapSlotKey(u64(mapDomainTag), keyAddressHex);
+  },
+  mapAddrWordKey(mapDomainTag: bigint, key32Hex: string, word: bigint): string {
+    return native.mapAddrWordKey(u64(mapDomainTag), key32Hex, u64(word));
+  },
+  scalarSlotKey(slot: bigint): string {
+    return native.scalarSlotKey(u64(slot));
   },
 };
 

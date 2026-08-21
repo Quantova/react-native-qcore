@@ -92,6 +92,72 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     fun chainIdFromName(name: String): String =
         uniffi.quantova_qcore.chainIdFromName(name).toString()
 
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun signPayableCall(
+        seedHex: String,
+        index: String,
+        target: String,
+        argsHex: String,
+        nonce: String,
+        meterLimit: String,
+        fee: String,
+        value: String,
+        chainId: String,
+    ): String =
+        uniffi.quantova_qcore.signPayableCall(
+            seedHex,
+            u64(index, "index"),
+            target,
+            argsHex,
+            u64(nonce, "nonce"),
+            u64(meterLimit, "meter limit"),
+            fee,
+            value,
+            u64(chainId, "chain id"),
+        )
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun signAssetCall(
+        seedHex: String,
+        index: String,
+        target: String,
+        argsHex: String,
+        assetIssuer: String,
+        amount: String,
+        nonce: String,
+        meterLimit: String,
+        fee: String,
+        chainId: String,
+    ): String =
+        uniffi.quantova_qcore.signAssetCall(
+            seedHex,
+            u64(index, "index"),
+            target,
+            argsHex,
+            assetIssuer,
+            amount,
+            u64(nonce, "nonce"),
+            u64(meterLimit, "meter limit"),
+            fee,
+            u64(chainId, "chain id"),
+        )
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun nameKey(label: String): String =
+        uniffi.quantova_qcore.nameKey(label)
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun mapSlotKey(mapDomainTag: String, keyAddressHex: String): String =
+        uniffi.quantova_qcore.mapSlotKey(u64(mapDomainTag, "map domain tag"), keyAddressHex)
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun mapAddrWordKey(mapDomainTag: String, key32Hex: String, word: String): String =
+        uniffi.quantova_qcore.mapAddrWordKey(u64(mapDomainTag, "map domain tag"), key32Hex, u64(word, "word"))
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun scalarSlotKey(slot: String): String =
+        uniffi.quantova_qcore.scalarSlotKey(u64(slot, "slot"))
+
     companion object {
         const val NAME = "Qcore"
     }
