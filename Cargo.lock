@@ -324,7 +324,7 @@ dependencies = [
  "qtv-idfmt",
  "qtv-tx",
  "qtv-vm",
- "zeroize",
+ "qtv-wipe",
 ]
 
 [[package]]
@@ -333,7 +333,7 @@ version = "0.1.0"
 dependencies = [
  "qtv-crypto",
  "qtv-idfmt",
- "zeroize",
+ "qtv-wipe",
 ]
 
 [[package]]
@@ -343,7 +343,7 @@ version = "0.1.0"
 [[package]]
 name = "qtv-crypto"
 version = "0.3.0"
-source = "git+https://github.com/Quantova/Q-Crypto.git?rev=33c7e9395ad23f07019909470d319211213e904f#33c7e9395ad23f07019909470d319211213e904f"
+source = "git+https://github.com/Quantova/Q-Crypto.git?rev=4d73a36c112b91a6a25a6a876f54cdccb729c7de#4d73a36c112b91a6a25a6a876f54cdccb729c7de"
 
 [[package]]
 name = "qtv-idfmt"
@@ -357,7 +357,7 @@ dependencies = [
  "qtv-codec",
  "qtv-crypto",
  "qtv-idfmt",
- "zeroize",
+ "qtv-wipe",
 ]
 
 [[package]]
@@ -366,6 +366,10 @@ version = "0.2.0"
 dependencies = [
  "qtv-crypto",
 ]
+
+[[package]]
+name = "qtv-wipe"
+version = "0.1.0"
 
 [[package]]
 name = "quote"
