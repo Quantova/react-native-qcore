@@ -85,6 +85,7 @@ pub fn sign_transfer(
     nonce: u64,
     fee: String,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<String, QcoreError> {
     let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
@@ -96,6 +97,7 @@ pub fn sign_transfer(
         nonce,
         parse_fee(&fee)?,
         chain_id,
+        valid_until,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -111,6 +113,7 @@ pub fn sign_call(
     meter_limit: u64,
     fee: String,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<String, QcoreError> {
     let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
@@ -124,6 +127,7 @@ pub fn sign_call(
         meter_limit,
         parse_fee(&fee)?,
         chain_id,
+        valid_until,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -136,11 +140,12 @@ pub fn sign_register(
     nonce: u64,
     fee: String,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<String, QcoreError> {
     let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
-    let signed =
-        qcore::sign_register(&seed, index, nonce, parse_fee(&fee)?, chain_id).map_err(err)?;
+    let signed = qcore::sign_register(&seed, index, nonce, parse_fee(&fee)?, chain_id, valid_until)
+        .map_err(err)?;
     Ok(signed_json(signed))
 }
 
@@ -171,6 +176,7 @@ pub fn sign_payable_call(
     fee: String,
     value: String,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<String, QcoreError> {
     let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
@@ -185,6 +191,7 @@ pub fn sign_payable_call(
         meter_limit,
         parse_fee(&fee)?,
         chain_id,
+        valid_until,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -203,6 +210,7 @@ pub fn sign_asset_call(
     meter_limit: u64,
     fee: String,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<String, QcoreError> {
     let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
@@ -218,6 +226,7 @@ pub fn sign_asset_call(
         meter_limit,
         parse_fee(&fee)?,
         chain_id,
+        valid_until,
     )
     .map_err(err)?;
     Ok(signed_json(signed))

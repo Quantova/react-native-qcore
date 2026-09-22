@@ -17,6 +17,7 @@ export interface QCore {
     nonce: bigint,
     fee: string,
     chainId: bigint,
+    validUntil: bigint,
   ): string;
   sign_call(
     seedHex: string,
@@ -27,8 +28,16 @@ export interface QCore {
     meterLimit: bigint,
     fee: string,
     chainId: bigint,
+    validUntil: bigint,
   ): string;
-  signRegister(seedHex: string, index: bigint, nonce: bigint, fee: string, chainId: bigint): string;
+  signRegister(
+    seedHex: string,
+    index: bigint,
+    nonce: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+  ): string;
   chainIdFromName(name: string): bigint;
   signPayableCall(
     seedHex: string,
@@ -40,6 +49,7 @@ export interface QCore {
     fee: string,
     value: string,
     chainId: bigint,
+    validUntil: bigint,
   ): string;
   signAssetCall(
     seedHex: string,
@@ -52,6 +62,7 @@ export interface QCore {
     meterLimit: bigint,
     fee: string,
     chainId: bigint,
+    validUntil: bigint,
   ): string;
   nameKey(label: string): string;
   mapSlotKey(mapDomainTag: bigint, keyAddressHex: string): string;
@@ -72,6 +83,7 @@ interface QcoreNative {
     nonce: string,
     fee: string,
     chainId: string,
+    validUntil: string,
   ): string;
   signCall(
     seedHex: string,
@@ -82,6 +94,7 @@ interface QcoreNative {
     meterLimit: string,
     fee: string,
     chainId: string,
+    validUntil: string,
   ): string;
   signRegister(
     seedHex: string,
@@ -89,6 +102,7 @@ interface QcoreNative {
     nonce: string,
     fee: string,
     chainId: string,
+    validUntil: string,
   ): string;
   chainIdFromName(name: string): string;
   signPayableCall(
@@ -101,6 +115,7 @@ interface QcoreNative {
     fee: string,
     value: string,
     chainId: string,
+    validUntil: string,
   ): string;
   signAssetCall(
     seedHex: string,
@@ -113,6 +128,7 @@ interface QcoreNative {
     meterLimit: string,
     fee: string,
     chainId: string,
+    validUntil: string,
   ): string;
   nameKey(label: string): string;
   mapSlotKey(mapDomainTag: string, keyAddressHex: string): string;
@@ -164,8 +180,18 @@ export const nativeQCore: QCore = {
     nonce: bigint,
     fee: string,
     chainId: bigint,
+    validUntil: bigint,
   ): string {
-    return native.signTransfer(seedHex, u64(index), to, amount, u64(nonce), fee, u64(chainId));
+    return native.signTransfer(
+      seedHex,
+      u64(index),
+      to,
+      amount,
+      u64(nonce),
+      fee,
+      u64(chainId),
+      u64(validUntil),
+    );
   },
   sign_call(
     seedHex: string,
@@ -176,6 +202,7 @@ export const nativeQCore: QCore = {
     meterLimit: bigint,
     fee: string,
     chainId: bigint,
+    validUntil: bigint,
   ): string {
     return native.signCall(
       seedHex,
@@ -186,10 +213,18 @@ export const nativeQCore: QCore = {
       u64(meterLimit),
       fee,
       u64(chainId),
+      u64(validUntil),
     );
   },
-  signRegister(seedHex: string, index: bigint, nonce: bigint, fee: string, chainId: bigint): string {
-    return native.signRegister(seedHex, u64(index), u64(nonce), fee, u64(chainId));
+  signRegister(
+    seedHex: string,
+    index: bigint,
+    nonce: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+  ): string {
+    return native.signRegister(seedHex, u64(index), u64(nonce), fee, u64(chainId), u64(validUntil));
   },
   chainIdFromName(name: string): bigint {
     return BigInt(native.chainIdFromName(name));
@@ -204,6 +239,7 @@ export const nativeQCore: QCore = {
     fee: string,
     value: string,
     chainId: bigint,
+    validUntil: bigint,
   ): string {
     return native.signPayableCall(
       seedHex,
@@ -215,6 +251,7 @@ export const nativeQCore: QCore = {
       fee,
       value,
       u64(chainId),
+      u64(validUntil),
     );
   },
   signAssetCall(
@@ -228,6 +265,7 @@ export const nativeQCore: QCore = {
     meterLimit: bigint,
     fee: string,
     chainId: bigint,
+    validUntil: bigint,
   ): string {
     return native.signAssetCall(
       seedHex,
@@ -240,6 +278,7 @@ export const nativeQCore: QCore = {
       u64(meterLimit),
       fee,
       u64(chainId),
+      u64(validUntil),
     );
   },
   nameKey(label: string): string {

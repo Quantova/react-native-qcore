@@ -40,7 +40,7 @@ class Qcore: NSObject {
         return NSNumber(value: validAddress(address: address))
     }
 
-    @objc(signTransfer:index:to:amount:nonce:fee:chainId:)
+    @objc(signTransfer:index:to:amount:nonce:fee:chainId:validUntil:)
     func rnSignTransfer(
         _ seedHex: String,
         index: String,
@@ -48,7 +48,8 @@ class Qcore: NSObject {
         amount: String,
         nonce: String,
         fee: String,
-        chainId: String
+        chainId: String,
+        validUntil: String
     ) -> NSString {
         do {
             return try signTransfer(
@@ -58,12 +59,13 @@ class Qcore: NSObject {
                 amount: amount,
                 nonce: u64(nonce, "nonce"),
                 fee: fee,
-                chainId: u64(chainId, "chain id")
+                chainId: u64(chainId, "chain id"),
+                validUntil: u64(validUntil, "valid until")
             ) as NSString
         } catch { abort("\(error)") }
     }
 
-    @objc(signCall:index:target:argsHex:nonce:meterLimit:fee:chainId:)
+    @objc(signCall:index:target:argsHex:nonce:meterLimit:fee:chainId:validUntil:)
     func rnSignCall(
         _ seedHex: String,
         index: String,
@@ -72,7 +74,8 @@ class Qcore: NSObject {
         nonce: String,
         meterLimit: String,
         fee: String,
-        chainId: String
+        chainId: String,
+        validUntil: String
     ) -> NSString {
         do {
             return try signCall(
@@ -83,18 +86,20 @@ class Qcore: NSObject {
                 nonce: u64(nonce, "nonce"),
                 meterLimit: u64(meterLimit, "meter limit"),
                 fee: fee,
-                chainId: u64(chainId, "chain id")
+                chainId: u64(chainId, "chain id"),
+                validUntil: u64(validUntil, "valid until")
             ) as NSString
         } catch { abort("\(error)") }
     }
 
-    @objc(signRegister:index:nonce:fee:chainId:)
+    @objc(signRegister:index:nonce:fee:chainId:validUntil:)
     func rnSignRegister(
         _ seedHex: String,
         index: String,
         nonce: String,
         fee: String,
-        chainId: String
+        chainId: String,
+        validUntil: String
     ) -> NSString {
         do {
             return try signRegister(
@@ -102,7 +107,68 @@ class Qcore: NSObject {
                 index: u64(index, "index"),
                 nonce: u64(nonce, "nonce"),
                 fee: fee,
-                chainId: u64(chainId, "chain id")
+                chainId: u64(chainId, "chain id"),
+                validUntil: u64(validUntil, "valid until")
+            ) as NSString
+        } catch { abort("\(error)") }
+    }
+
+    @objc(signPayableCall:index:target:argsHex:nonce:meterLimit:fee:value:chainId:validUntil:)
+    func rnSignPayableCall(
+        _ seedHex: String,
+        index: String,
+        target: String,
+        argsHex: String,
+        nonce: String,
+        meterLimit: String,
+        fee: String,
+        value: String,
+        chainId: String,
+        validUntil: String
+    ) -> NSString {
+        do {
+            return try signPayableCall(
+                seedHex: seedHex,
+                index: u64(index, "index"),
+                target: target,
+                argsHex: argsHex,
+                nonce: u64(nonce, "nonce"),
+                meterLimit: u64(meterLimit, "meter limit"),
+                fee: fee,
+                value: value,
+                chainId: u64(chainId, "chain id"),
+                validUntil: u64(validUntil, "valid until")
+            ) as NSString
+        } catch { abort("\(error)") }
+    }
+
+    @objc(signAssetCall:index:target:argsHex:assetIssuer:amount:nonce:meterLimit:fee:chainId:validUntil:)
+    func rnSignAssetCall(
+        _ seedHex: String,
+        index: String,
+        target: String,
+        argsHex: String,
+        assetIssuer: String,
+        amount: String,
+        nonce: String,
+        meterLimit: String,
+        fee: String,
+        chainId: String,
+        validUntil: String
+    ) -> NSString {
+        do {
+            return try signAssetCall(
+                seedHex: seedHex,
+                index: u64(index, "index"),
+                target: target,
+                argsHex: argsHex,
+                assetIssuer: assetIssuer,
+                amount: amount,
+                nonce: u64(nonce, "nonce"),
+                meterLimit: u64(meterLimit, "meter limit"),
+                fee: fee,
+                chainId: u64(chainId, "chain id"),
+                validUntil: u64(validUntil, "valid until")
             ) as NSString
         } catch { abort("\(error)") }
     }

@@ -39,6 +39,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         nonce: String,
         fee: String,
         chainId: String,
+        validUntil: String,
     ): String =
         uniffi.quantova_qcore.signTransfer(
             seedHex,
@@ -48,6 +49,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
             u64(nonce, "nonce"),
             fee,
             u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
         )
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -60,6 +62,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         meterLimit: String,
         fee: String,
         chainId: String,
+        validUntil: String,
     ): String =
         uniffi.quantova_qcore.signCall(
             seedHex,
@@ -70,6 +73,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
             u64(meterLimit, "meter limit"),
             fee,
             u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
         )
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -79,6 +83,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         nonce: String,
         fee: String,
         chainId: String,
+        validUntil: String,
     ): String =
         uniffi.quantova_qcore.signRegister(
             seedHex,
@@ -86,6 +91,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
             u64(nonce, "nonce"),
             fee,
             u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
         )
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -103,6 +109,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         fee: String,
         value: String,
         chainId: String,
+        validUntil: String,
     ): String =
         uniffi.quantova_qcore.signPayableCall(
             seedHex,
@@ -114,6 +121,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
             fee,
             value,
             u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
         )
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -128,6 +136,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         meterLimit: String,
         fee: String,
         chainId: String,
+        validUntil: String,
     ): String =
         uniffi.quantova_qcore.signAssetCall(
             seedHex,
@@ -140,6 +149,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
             u64(meterLimit, "meter limit"),
             fee,
             u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
         )
 
     @ReactMethod(isBlockingSynchronousMethod = true)

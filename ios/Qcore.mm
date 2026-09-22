@@ -19,7 +19,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signTransfer:(NSString *)seedHex
                                         amount:(NSString *)amount
                                         nonce:(NSString *)nonce
                                         fee:(NSString *)fee
-                                        chainId:(NSString *)chainId)
+                                        chainId:(NSString *)chainId
+                                        validUntil:(NSString *)validUntil)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signCall:(NSString *)seedHex
                                         index:(NSString *)index
@@ -28,13 +29,38 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signCall:(NSString *)seedHex
                                         nonce:(NSString *)nonce
                                         meterLimit:(NSString *)meterLimit
                                         fee:(NSString *)fee
-                                        chainId:(NSString *)chainId)
+                                        chainId:(NSString *)chainId
+                                        validUntil:(NSString *)validUntil)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signRegister:(NSString *)seedHex
                                         index:(NSString *)index
                                         nonce:(NSString *)nonce
                                         fee:(NSString *)fee
-                                        chainId:(NSString *)chainId)
+                                        chainId:(NSString *)chainId
+                                        validUntil:(NSString *)validUntil)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signPayableCall:(NSString *)seedHex
+                                        index:(NSString *)index
+                                        target:(NSString *)target
+                                        argsHex:(NSString *)argsHex
+                                        nonce:(NSString *)nonce
+                                        meterLimit:(NSString *)meterLimit
+                                        fee:(NSString *)fee
+                                        value:(NSString *)value
+                                        chainId:(NSString *)chainId
+                                        validUntil:(NSString *)validUntil)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signAssetCall:(NSString *)seedHex
+                                        index:(NSString *)index
+                                        target:(NSString *)target
+                                        argsHex:(NSString *)argsHex
+                                        assetIssuer:(NSString *)assetIssuer
+                                        amount:(NSString *)amount
+                                        nonce:(NSString *)nonce
+                                        meterLimit:(NSString *)meterLimit
+                                        fee:(NSString *)fee
+                                        chainId:(NSString *)chainId
+                                        validUntil:(NSString *)validUntil)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(chainIdFromName:(NSString *)name)
 
