@@ -77,6 +77,7 @@ pub fn valid_address(address: String) -> bool {
 }
 
 #[uniffi::export]
+#[allow(clippy::too_many_arguments)]
 pub fn sign_transfer(
     seed_hex: String,
     index: u64,
@@ -104,6 +105,7 @@ pub fn sign_transfer(
 }
 
 #[uniffi::export]
+#[allow(clippy::too_many_arguments)]
 pub fn sign_call(
     seed_hex: String,
     index: u64,
