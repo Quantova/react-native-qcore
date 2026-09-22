@@ -177,4 +177,35 @@ class Qcore: NSObject {
     func rnChainIdFromName(_ name: String) -> NSString {
         return String(chainIdFromName(name: name)) as NSString
     }
+
+    @objc(nameKey:)
+    func rnNameKey(_ label: String) -> NSString {
+        return nameKey(label: label) as NSString
+    }
+
+    @objc(mapSlotKey:keyAddressHex:)
+    func rnMapSlotKey(_ mapDomainTag: String, keyAddressHex: String) -> NSString {
+        do {
+            return try mapSlotKey(
+                mapDomainTag: u64(mapDomainTag, "map domain tag"),
+                keyAddressHex: keyAddressHex
+            ) as NSString
+        } catch { abort("\(error)") }
+    }
+
+    @objc(mapAddrWordKey:key32Hex:word:)
+    func rnMapAddrWordKey(_ mapDomainTag: String, key32Hex: String, word: String) -> NSString {
+        do {
+            return try mapAddrWordKey(
+                mapDomainTag: u64(mapDomainTag, "map domain tag"),
+                keyAddressHex: key32Hex,
+                word: u64(word, "word")
+            ) as NSString
+        } catch { abort("\(error)") }
+    }
+
+    @objc(scalarSlotKey:)
+    func rnScalarSlotKey(_ slot: String) -> NSString {
+        return scalarSlotKey(slot: u64(slot, "slot")) as NSString
+    }
 }

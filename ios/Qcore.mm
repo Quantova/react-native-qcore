@@ -64,6 +64,17 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signAssetCall:(NSString *)seedHex
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(chainIdFromName:(NSString *)name)
 
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(nameKey:(NSString *)label)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(mapSlotKey:(NSString *)mapDomainTag
+                                        keyAddressHex:(NSString *)keyAddressHex)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(mapAddrWordKey:(NSString *)mapDomainTag
+                                        key32Hex:(NSString *)key32Hex
+                                        word:(NSString *)word)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(scalarSlotKey:(NSString *)slot)
+
 + (BOOL)requiresMainQueueSetup
 {
     return NO;

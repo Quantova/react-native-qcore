@@ -58,8 +58,6 @@ pub fn mnemonic_from_seed(seed_hex: String) -> Result<String, QcoreError> {
 #[uniffi::export]
 pub fn seed_from_mnemonic(phrase: String) -> Result<String, QcoreError> {
     let phrase = Zeroizing::new(phrase);
-    // qcore::seed_from_mnemonic already returns a Zeroizing<[u8; SEED_LEN]> (0.1.21 secure-wipe
-    // hardening), so do NOT wrap it again — the double Zeroizing can't be indexed.
     let seed = qcore::seed_from_mnemonic(&phrase).map_err(err)?;
     Ok(to_hex(&seed[..]))
 }
