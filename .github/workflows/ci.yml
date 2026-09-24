@@ -1,0 +1,54 @@
+# Copyright 2026 Quantova Inc
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: react-native-qcore
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Quantova/QCore.rs
+          ref: 3e2e0be01b4b60c33b534c3af7c5a2fc0b6cd43f
+          path: QCore.rs
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Quantova/Quantova-Chain
+          ref: 097dfddf7ba8ea64ce61f8c8e5720310ab7bd128
+          path: Quantova-Chain
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Quantova/QVM
+          ref: 040c07fb08e77a491a7bb1e99fde50a199a5cb47
+          path: QVM
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: fmt
+        working-directory: react-native-qcore
+        run: cargo fmt --all -- --check
+      - name: clippy
+        working-directory: react-native-qcore
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: test
+        working-directory: react-native-qcore
+        run: cargo test --all-features --locked
+      - name: deny
+        working-directory: react-native-qcore
+        run: |
+          cargo install --locked cargo-deny --version 0.16.4
+          cargo deny check bans licenses sources advisories

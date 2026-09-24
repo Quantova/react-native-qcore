@@ -261,3 +261,105 @@ pub fn map_addr_word_key(
         word,
     )))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEED: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+
+    #[test]
+    fn a_malformed_address_is_an_error_and_not_a_panic() {
+        for bad in ["not an address", "", "Q1zzzz"] {
+            assert!(
+                sign_transfer(
+                    SEED.to_string(),
+                    0,
+                    bad.to_string(),
+                    "5".to_string(),
+                    0,
+                    "1".to_string(),
+                    1,
+                    0,
+                )
+                .is_err(),
+                "a transfer to {bad:?} must return an error, not sign and not panic"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_seed_is_an_error_and_not_a_panic() {
+        let to = address(SEED.to_string(), 0).expect("a good seed derives an address");
+        for bad in ["", "00", "zz", &"00".repeat(31)] {
+            assert!(
+                address(bad.to_string(), 0).is_err(),
+                "the seed {bad:?} must be refused"
+            );
+            assert!(
+                sign_transfer(
+                    bad.to_string(),
+                    0,
+                    to.clone(),
+                    "5".to_string(),
+                    0,
+                    "1".to_string(),
+                    1,
+                    0,
+                )
+                .is_err(),
+                "signing under the seed {bad:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn an_index_selects_the_key_it_names() {
+        let zero = address(SEED.to_string(), 0).expect("index zero derives");
+        let one = address(SEED.to_string(), 1).expect("index one derives");
+        let last = address(SEED.to_string(), u64::MAX).expect("the last index derives");
+        assert_ne!(zero, one, "two indices must not share an address");
+        assert_ne!(one, last, "the far end of the range is its own address");
+        assert_eq!(
+            zero,
+            address(SEED.to_string(), 0).expect("deriving twice agrees"),
+            "an index gives the same address every time"
+        );
+        assert!(valid_address(zero), "a derived address must parse");
+    }
+
+    #[test]
+    fn a_full_width_amount_survives_the_boundary() {
+        let to = address(SEED.to_string(), 3).expect("derives");
+        let sign = |amount: &str| {
+            sign_transfer(
+                SEED.to_string(),
+                0,
+                to.clone(),
+                amount.to_string(),
+                0,
+                "1".to_string(),
+                1,
+                0,
+            )
+            .expect("a good transfer signs")
+        };
+        assert_ne!(
+            sign("9007199254740992"),
+            sign("9007199254740993"),
+            "two amounts one apart must not sign alike"
+        );
+        assert!(!sign("18446744073709551615").is_empty());
+    }
+
+    #[test]
+    fn a_phrase_carries_the_seed_it_was_made_from() {
+        let phrase = mnemonic_from_seed(SEED.to_string()).expect("a seed makes a phrase");
+        let back = seed_from_mnemonic(phrase).expect("the phrase gives the seed back");
+        assert_eq!(back, SEED, "a phrase must round trip to its own seed");
+        assert!(
+            seed_from_mnemonic("word ".repeat(24).trim().to_string()).is_err(),
+            "a phrase that is not one of ours is refused, not guessed at"
+        );
+    }
+}
