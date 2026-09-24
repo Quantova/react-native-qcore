@@ -140,6 +140,24 @@ const LINKING_ERROR =
   "The '@quantovainc/react-native-qcore' native module is not available. Rebuild the app after " +
   'adding the package so the Quantova client core is linked on device.';
 
+const FAILURE_PREFIX = '\u0000QCORE_ERROR:';
+
+function throwingOnFailure(module: QcoreNative): QcoreNative {
+  return new Proxy(module, {
+    get(target, property, receiver) {
+      const member = Reflect.get(target, property, receiver);
+      if (typeof member !== 'function') return member;
+      return (...args: unknown[]) => {
+        const result = (member as (...a: unknown[]) => unknown).apply(target, args);
+        if (typeof result === 'string' && result.startsWith(FAILURE_PREFIX)) {
+          throw new Error(result.slice(FAILURE_PREFIX.length));
+        }
+        return result;
+      };
+    },
+  }) as QcoreNative;
+}
+
 function resolveNative(): QcoreNative {
   const turbo =
     typeof TurboModuleRegistry !== 'undefined' && TurboModuleRegistry
@@ -147,7 +165,7 @@ function resolveNative(): QcoreNative {
       : null;
   const legacy = (NativeModules && (NativeModules.Qcore as unknown as QcoreNative)) || null;
   const found = turbo || legacy;
-  if (found) return found;
+  if (found) return throwingOnFailure(found);
   return new Proxy({} as QcoreNative, {
     get() {
       throw new Error(LINKING_ERROR);

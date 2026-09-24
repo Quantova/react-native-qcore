@@ -10,29 +10,37 @@ class Qcore: NSObject {
         return false
     }
 
-    private func abort(_ reason: String) -> Never {
-        NSException(name: NSExceptionName(rawValue: "QcoreError"), reason: reason, userInfo: nil).raise()
-        fatalError(reason)
+    static let failurePrefix = "\u{0}QCORE_ERROR:"
+
+    private struct BridgeError: Error {
+        let message: String
     }
 
-    private func u64(_ value: String, _ label: String) -> UInt64 {
-        guard let parsed = UInt64(value) else { abort("the \(label) is not a whole number") }
+    private func failure(_ error: Error) -> NSString {
+        let message = (error as? BridgeError)?.message ?? "\(error)"
+        return (Qcore.failurePrefix + message) as NSString
+    }
+
+    private func u64(_ value: String, _ label: String) throws -> UInt64 {
+        guard let parsed = UInt64(value) else {
+            throw BridgeError(message: "the \(label) is not a whole number")
+        }
         return parsed
     }
 
     @objc(mnemonicFromSeed:)
     func rnMnemonicFromSeed(_ seedHex: String) -> NSString {
-        do { return try mnemonicFromSeed(seedHex: seedHex) as NSString } catch { abort("\(error)") }
+        do { return try mnemonicFromSeed(seedHex: seedHex) as NSString } catch { return failure(error) }
     }
 
     @objc(seedFromMnemonic:)
     func rnSeedFromMnemonic(_ phrase: String) -> NSString {
-        do { return try seedFromMnemonic(phrase: phrase) as NSString } catch { abort("\(error)") }
+        do { return try seedFromMnemonic(phrase: phrase) as NSString } catch { return failure(error) }
     }
 
     @objc(address:index:)
     func rnAddress(_ seedHex: String, index: String) -> NSString {
-        do { return try address(seedHex: seedHex, index: u64(index, "index")) as NSString } catch { abort("\(error)") }
+        do { return try address(seedHex: seedHex, index: try u64(index, "index")) as NSString } catch { return failure(error) }
     }
 
     @objc(validAddress:)
@@ -54,15 +62,15 @@ class Qcore: NSObject {
         do {
             return try signTransfer(
                 seedHex: seedHex,
-                index: u64(index, "index"),
+                index: try u64(index, "index"),
                 to: to,
                 amount: amount,
-                nonce: u64(nonce, "nonce"),
+                nonce: try u64(nonce, "nonce"),
                 fee: fee,
-                chainId: u64(chainId, "chain id"),
-                validUntil: u64(validUntil, "valid until")
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until")
             ) as NSString
-        } catch { abort("\(error)") }
+        } catch { return failure(error) }
     }
 
     @objc(signCall:index:target:argsHex:nonce:meterLimit:fee:chainId:validUntil:)
@@ -80,16 +88,16 @@ class Qcore: NSObject {
         do {
             return try signCall(
                 seedHex: seedHex,
-                index: u64(index, "index"),
+                index: try u64(index, "index"),
                 target: target,
                 argsHex: argsHex,
-                nonce: u64(nonce, "nonce"),
-                meterLimit: u64(meterLimit, "meter limit"),
+                nonce: try u64(nonce, "nonce"),
+                meterLimit: try u64(meterLimit, "meter limit"),
                 fee: fee,
-                chainId: u64(chainId, "chain id"),
-                validUntil: u64(validUntil, "valid until")
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until")
             ) as NSString
-        } catch { abort("\(error)") }
+        } catch { return failure(error) }
     }
 
     @objc(signRegister:index:nonce:fee:chainId:validUntil:)
@@ -104,13 +112,13 @@ class Qcore: NSObject {
         do {
             return try signRegister(
                 seedHex: seedHex,
-                index: u64(index, "index"),
-                nonce: u64(nonce, "nonce"),
+                index: try u64(index, "index"),
+                nonce: try u64(nonce, "nonce"),
                 fee: fee,
-                chainId: u64(chainId, "chain id"),
-                validUntil: u64(validUntil, "valid until")
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until")
             ) as NSString
-        } catch { abort("\(error)") }
+        } catch { return failure(error) }
     }
 
     @objc(signPayableCall:index:target:argsHex:nonce:meterLimit:fee:value:chainId:validUntil:)
@@ -129,17 +137,17 @@ class Qcore: NSObject {
         do {
             return try signPayableCall(
                 seedHex: seedHex,
-                index: u64(index, "index"),
+                index: try u64(index, "index"),
                 target: target,
                 argsHex: argsHex,
-                nonce: u64(nonce, "nonce"),
-                meterLimit: u64(meterLimit, "meter limit"),
+                nonce: try u64(nonce, "nonce"),
+                meterLimit: try u64(meterLimit, "meter limit"),
                 fee: fee,
                 value: value,
-                chainId: u64(chainId, "chain id"),
-                validUntil: u64(validUntil, "valid until")
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until")
             ) as NSString
-        } catch { abort("\(error)") }
+        } catch { return failure(error) }
     }
 
     @objc(signAssetCall:index:target:argsHex:assetIssuer:amount:nonce:meterLimit:fee:chainId:validUntil:)
@@ -159,18 +167,18 @@ class Qcore: NSObject {
         do {
             return try signAssetCall(
                 seedHex: seedHex,
-                index: u64(index, "index"),
+                index: try u64(index, "index"),
                 target: target,
                 argsHex: argsHex,
                 assetIssuer: assetIssuer,
                 amount: amount,
-                nonce: u64(nonce, "nonce"),
-                meterLimit: u64(meterLimit, "meter limit"),
+                nonce: try u64(nonce, "nonce"),
+                meterLimit: try u64(meterLimit, "meter limit"),
                 fee: fee,
-                chainId: u64(chainId, "chain id"),
-                validUntil: u64(validUntil, "valid until")
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until")
             ) as NSString
-        } catch { abort("\(error)") }
+        } catch { return failure(error) }
     }
 
     @objc(chainIdFromName:)
@@ -187,25 +195,27 @@ class Qcore: NSObject {
     func rnMapSlotKey(_ mapDomainTag: String, keyAddressHex: String) -> NSString {
         do {
             return try mapSlotKey(
-                mapDomainTag: u64(mapDomainTag, "map domain tag"),
+                mapDomainTag: try u64(mapDomainTag, "map domain tag"),
                 keyAddressHex: keyAddressHex
             ) as NSString
-        } catch { abort("\(error)") }
+        } catch { return failure(error) }
     }
 
     @objc(mapAddrWordKey:key32Hex:word:)
     func rnMapAddrWordKey(_ mapDomainTag: String, key32Hex: String, word: String) -> NSString {
         do {
             return try mapAddrWordKey(
-                mapDomainTag: u64(mapDomainTag, "map domain tag"),
+                mapDomainTag: try u64(mapDomainTag, "map domain tag"),
                 keyAddressHex: key32Hex,
-                word: u64(word, "word")
+                word: try u64(word, "word")
             ) as NSString
-        } catch { abort("\(error)") }
+        } catch { return failure(error) }
     }
 
     @objc(scalarSlotKey:)
     func rnScalarSlotKey(_ slot: String) -> NSString {
-        return scalarSlotKey(slot: u64(slot, "slot")) as NSString
+        do {
+            return scalarSlotKey(slot: try u64(slot, "slot")) as NSString
+        } catch { return failure(error) }
     }
 }
