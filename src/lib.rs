@@ -52,7 +52,7 @@ fn signed_json(signed: qcore::SignedTransfer) -> String {
 pub fn mnemonic_from_seed(seed_hex: String) -> Result<String, QcoreError> {
     let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
-    Ok(qcore::mnemonic_from_seed(&seed))
+    Ok(qcore::mnemonic_from_seed(&seed).to_string())
 }
 
 #[uniffi::export]
