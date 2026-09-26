@@ -66,6 +66,22 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sameAddress(a: String, b: String): Boolean =
+        try {
+            uniffi.quantova_qcore.sameAddress(a, b)
+        } catch (error: Throwable) {
+            false
+        }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun lookalikeOf(candidate: String, known: String): String =
+        try {
+            uniffi.quantova_qcore.lookalikeOf(candidate, known.split(",").filter { it.isNotEmpty() }) ?: ""
+        } catch (error: Throwable) {
+            ""
+        }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
     fun signTransfer(
         seedHex: String,
         index: String,

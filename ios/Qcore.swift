@@ -70,6 +70,17 @@ class Qcore: NSObject {
         return NSNumber(value: validAddress(address: address))
     }
 
+    @objc(sameAddress:b:)
+    func rnSameAddress(_ a: String, b: String) -> NSNumber {
+        return NSNumber(value: sameAddress(a: a, b: b))
+    }
+
+    @objc(lookalikeOf:known:)
+    func rnLookalikeOf(_ candidate: String, known: String) -> NSString {
+        let list = known.split(separator: ",").map(String.init)
+        return (lookalikeOf(candidate: candidate, known: list) ?? "") as NSString
+    }
+
     @objc(signTransfer:index:to:amount:nonce:fee:chainId:validUntil:)
     func rnSignTransfer(
         _ seedHex: String,

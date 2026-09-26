@@ -10,6 +10,8 @@ export interface QCore {
   seedFromMnemonic(phrase: string): string;
   address(seedHex: string, index: bigint): string;
   valid_address(address: string): boolean;
+  sameAddress(a: string, b: string): boolean;
+  lookalikeOf(candidate: string, known: string[]): string | null;
   sign_transfer(
     seedHex: string,
     index: bigint,
@@ -81,6 +83,8 @@ interface QcoreNative {
   seedFromMnemonic(phrase: string): string;
   address(seedHex: string, index: string): string;
   validAddress(address: string): boolean;
+  sameAddress(a: string, b: string): boolean;
+  lookalikeOf(candidate: string, known: string): string;
   signTransfer(
     seedHex: string,
     index: string,
@@ -204,6 +208,12 @@ export const nativeQCore: QCore = {
   },
   valid_address(address: string): boolean {
     return native.validAddress(address);
+  },
+  sameAddress(a: string, b: string): boolean {
+    return native.sameAddress(a, b);
+  },
+  lookalikeOf(candidate: string, known: string[]): string | null {
+    return native.lookalikeOf(candidate, known.join(',')) || null;
   },
   sign_transfer(
     seedHex: string,

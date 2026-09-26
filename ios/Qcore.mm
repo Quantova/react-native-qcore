@@ -18,6 +18,10 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(address:(NSString *)seedHex index:(NSStr
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(validAddress:(NSString *)address)
 
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sameAddress:(NSString *)a b:(NSString *)b)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(lookalikeOf:(NSString *)candidate known:(NSString *)known)
+
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signTransfer:(NSString *)seedHex
                                         index:(NSString *)index
                                         to:(NSString *)to

@@ -96,6 +96,16 @@ pub fn valid_address(address: String) -> bool {
 }
 
 #[uniffi::export]
+pub fn same_address(a: String, b: String) -> bool {
+    qcore::same_address(&a, &b)
+}
+
+#[uniffi::export]
+pub fn lookalike_of(candidate: String, known: Vec<String>) -> Option<String> {
+    qcore::lookalike_of(&candidate, &known)
+}
+
+#[uniffi::export]
 #[allow(clippy::too_many_arguments)]
 pub fn sign_transfer(
     seed_hex: String,
