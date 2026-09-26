@@ -4,7 +4,8 @@
 import { NativeModules, TurboModuleRegistry } from 'react-native';
 
 export interface QCore {
-  generateSeed?(): string;
+  generateSeed(): string;
+  vmCallFee(transferFee: string, meterLimit: bigint): bigint;
   mnemonicFromSeed(seedHex: string): string;
   seedFromMnemonic(phrase: string): string;
   address(seedHex: string, index: bigint): string;
@@ -29,6 +30,7 @@ export interface QCore {
     fee: string,
     chainId: bigint,
     validUntil: bigint,
+    transferFee: string,
   ): string;
   signRegister(
     seedHex: string,
@@ -50,6 +52,7 @@ export interface QCore {
     value: string,
     chainId: bigint,
     validUntil: bigint,
+    transferFee: string,
   ): string;
   signAssetCall(
     seedHex: string,
@@ -63,6 +66,7 @@ export interface QCore {
     fee: string,
     chainId: bigint,
     validUntil: bigint,
+    transferFee: string,
   ): string;
   nameKey(label: string): string;
   mapSlotKey(mapDomainTag: bigint, keyAddressHex: string): string;
@@ -71,6 +75,8 @@ export interface QCore {
 }
 
 interface QcoreNative {
+  generateSeed(): string;
+  vmCallFee(transferFee: string, meterLimit: string): string;
   mnemonicFromSeed(seedHex: string): string;
   seedFromMnemonic(phrase: string): string;
   address(seedHex: string, index: string): string;
@@ -95,6 +101,7 @@ interface QcoreNative {
     fee: string,
     chainId: string,
     validUntil: string,
+    transferFee: string,
   ): string;
   signRegister(
     seedHex: string,
@@ -116,6 +123,7 @@ interface QcoreNative {
     value: string,
     chainId: string,
     validUntil: string,
+    transferFee: string,
   ): string;
   signAssetCall(
     seedHex: string,
@@ -129,6 +137,7 @@ interface QcoreNative {
     fee: string,
     chainId: string,
     validUntil: string,
+    transferFee: string,
   ): string;
   nameKey(label: string): string;
   mapSlotKey(mapDomainTag: string, keyAddressHex: string): string;
@@ -178,6 +187,12 @@ const native = resolveNative();
 const u64 = (value: bigint): string => value.toString(10);
 
 export const nativeQCore: QCore = {
+  generateSeed(): string {
+    return native.generateSeed();
+  },
+  vmCallFee(transferFee: string, meterLimit: bigint): bigint {
+    return BigInt(native.vmCallFee(transferFee, u64(meterLimit)));
+  },
   mnemonicFromSeed(seedHex: string): string {
     return native.mnemonicFromSeed(seedHex);
   },
@@ -221,6 +236,7 @@ export const nativeQCore: QCore = {
     fee: string,
     chainId: bigint,
     validUntil: bigint,
+    transferFee: string,
   ): string {
     return native.signCall(
       seedHex,
@@ -232,6 +248,7 @@ export const nativeQCore: QCore = {
       fee,
       u64(chainId),
       u64(validUntil),
+      transferFee,
     );
   },
   signRegister(
@@ -258,6 +275,7 @@ export const nativeQCore: QCore = {
     value: string,
     chainId: bigint,
     validUntil: bigint,
+    transferFee: string,
   ): string {
     return native.signPayableCall(
       seedHex,
@@ -270,6 +288,7 @@ export const nativeQCore: QCore = {
       value,
       u64(chainId),
       u64(validUntil),
+      transferFee,
     );
   },
   signAssetCall(
@@ -284,6 +303,7 @@ export const nativeQCore: QCore = {
     fee: string,
     chainId: bigint,
     validUntil: bigint,
+    transferFee: string,
   ): string {
     return native.signAssetCall(
       seedHex,
@@ -297,6 +317,7 @@ export const nativeQCore: QCore = {
       fee,
       u64(chainId),
       u64(validUntil),
+      transferFee,
     );
   },
   nameKey(label: string): string {

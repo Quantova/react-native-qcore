@@ -27,13 +27,23 @@ fn parse_seed(seed_hex: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, QcoreError> {
     Ok(seed)
 }
 
+fn digits(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn parse_amount(value: &str) -> Result<u64, QcoreError> {
+    if !digits(value) {
+        return Err(err("the amount is not a whole number of Quon"));
+    }
     value
         .parse::<u64>()
         .map_err(|_| err("the amount is not a whole number of Quon"))
 }
 
 fn parse_fee(value: &str) -> Result<u128, QcoreError> {
+    if !digits(value) {
+        return Err(err("the fee is not a whole number of Quon"));
+    }
     value
         .parse::<u128>()
         .map_err(|_| err("the fee is not a whole number of Quon"))
@@ -46,6 +56,17 @@ fn signed_json(signed: qcore::SignedTransfer) -> String {
         ("tx_hex", Json::str(to_hex(&signed.tx_bytes))),
     ])
     .render()
+}
+
+#[uniffi::export]
+pub fn generate_seed() -> Result<String, QcoreError> {
+    let seed = qcore::generate_seed().map_err(err)?;
+    Ok(to_hex(&seed[..]))
+}
+
+#[uniffi::export]
+pub fn vm_call_fee(transfer_fee: String, meter_limit: u64) -> Result<String, QcoreError> {
+    Ok(qcore::vm_call_fee(parse_fee(&transfer_fee)?, meter_limit).to_string())
 }
 
 #[uniffi::export]
@@ -114,6 +135,7 @@ pub fn sign_call(
     fee: String,
     chain_id: u64,
     valid_until: u64,
+    transfer_fee: String,
 ) -> Result<String, QcoreError> {
     let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
@@ -128,6 +150,7 @@ pub fn sign_call(
         parse_fee(&fee)?,
         chain_id,
         valid_until,
+        parse_fee(&transfer_fee)?,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -177,6 +200,7 @@ pub fn sign_payable_call(
     value: String,
     chain_id: u64,
     valid_until: u64,
+    transfer_fee: String,
 ) -> Result<String, QcoreError> {
     let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
@@ -192,6 +216,7 @@ pub fn sign_payable_call(
         parse_fee(&fee)?,
         chain_id,
         valid_until,
+        parse_fee(&transfer_fee)?,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -211,6 +236,7 @@ pub fn sign_asset_call(
     fee: String,
     chain_id: u64,
     valid_until: u64,
+    transfer_fee: String,
 ) -> Result<String, QcoreError> {
     let seed_hex = Zeroizing::new(seed_hex);
     let seed = parse_seed(&seed_hex)?;
@@ -227,6 +253,7 @@ pub fn sign_asset_call(
         parse_fee(&fee)?,
         chain_id,
         valid_until,
+        parse_fee(&transfer_fee)?,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -280,7 +307,7 @@ mod tests {
                     0,
                     "1".to_string(),
                     1,
-                    0,
+                    300,
                 )
                 .is_err(),
                 "a transfer to {bad:?} must return an error, not sign and not panic"
@@ -305,7 +332,7 @@ mod tests {
                     0,
                     "1".to_string(),
                     1,
-                    0,
+                    300,
                 )
                 .is_err(),
                 "signing under the seed {bad:?} must be refused"
@@ -340,7 +367,7 @@ mod tests {
                 0,
                 "1".to_string(),
                 1,
-                0,
+                300,
             )
             .expect("a good transfer signs")
         };
@@ -361,5 +388,114 @@ mod tests {
             seed_from_mnemonic("word ".repeat(24).trim().to_string()).is_err(),
             "a phrase that is not one of ours is refused, not guessed at"
         );
+    }
+
+    #[test]
+    fn a_phrase_is_normalised_and_a_standard_bip39_phrase_is_named() {
+        let phrase = mnemonic_from_seed(SEED.to_string()).expect("a seed makes a phrase");
+        let messy = format!(
+            "  {}\u{00a0}\n",
+            phrase
+                .to_uppercase()
+                .split(' ')
+                .collect::<Vec<_>>()
+                .join(" \u{3000} ")
+        );
+        assert_eq!(seed_from_mnemonic(messy).expect("normalised"), SEED);
+        let standard = seed_from_mnemonic(format!("{} about", ["abandon"; 11].join(" ")))
+            .unwrap_err()
+            .to_string();
+        assert!(standard.contains("standard BIP-39"), "{standard}");
+    }
+
+    #[test]
+    fn a_generated_seed_is_thirty_two_random_bytes() {
+        let first = generate_seed().expect("the platform random source is available");
+        let second = generate_seed().expect("the platform random source is available");
+        assert_eq!(first.len(), 64);
+        assert_ne!(first, second);
+        assert!(valid_address(
+            address(first, 0).expect("a generated seed derives")
+        ));
+    }
+
+    #[test]
+    fn a_call_is_priced_by_its_meter_and_refused_outside_the_chain_rules() {
+        let to = address(SEED.to_string(), 1).expect("derives");
+        assert_eq!(vm_call_fee("500".to_string(), 21_000).unwrap(), "9000");
+        assert!(vm_call_fee("-1".to_string(), 21_000).is_err());
+        let call = |meter: u64, fee: &str, args: &str| {
+            sign_call(
+                SEED.to_string(),
+                0,
+                to.clone(),
+                args.to_string(),
+                0,
+                meter,
+                fee.to_string(),
+                1,
+                300,
+                "500".to_string(),
+            )
+        };
+        assert!(call(21_000, "9000", "").is_ok());
+        assert!(
+            call(21_000, "500", "").is_err(),
+            "one transfer fee underpays a 21000 meter"
+        );
+        assert!(call(1_209, "500", "").is_err());
+        assert!(call(12_500_001, "5170000", "").is_err());
+        assert!(call(21_000, "9000", &"00".repeat(128 * 1024 + 1)).is_err());
+        assert!(sign_payable_call(
+            SEED.to_string(),
+            0,
+            to.clone(),
+            String::new(),
+            0,
+            21_000,
+            "500".to_string(),
+            "0".to_string(),
+            1,
+            300,
+            "500".to_string(),
+        )
+        .is_err());
+        assert!(sign_asset_call(
+            SEED.to_string(),
+            0,
+            to.clone(),
+            String::new(),
+            to.clone(),
+            "1".to_string(),
+            0,
+            21_000,
+            "500".to_string(),
+            1,
+            300,
+            "500".to_string(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_self_transfer_or_a_deadline_of_zero_is_refused() {
+        let own = address(SEED.to_string(), 0).expect("derives");
+        let other = address(SEED.to_string(), 1).expect("derives");
+        let sign = |to: String, amount: &str, valid_until: u64| {
+            sign_transfer(
+                SEED.to_string(),
+                0,
+                to,
+                amount.to_string(),
+                0,
+                "1".to_string(),
+                1,
+                valid_until,
+            )
+        };
+        assert!(sign(own, "5", 300).is_err());
+        assert!(sign(other.clone(), "5", 0).is_err());
+        assert!(sign(other.clone(), "+5", 300).is_err());
+        assert!(sign(other, "5", 300).is_ok());
     }
 }

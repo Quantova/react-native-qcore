@@ -17,7 +17,14 @@ class Qcore: NSObject {
     }
 
     private func failure(_ error: Error) -> NSString {
-        let message = (error as? BridgeError)?.message ?? "\(error)"
+        let message: String
+        if let bridge = error as? BridgeError {
+            message = bridge.message
+        } else if let core = error as? QcoreError, case let .Invalid(reason) = core {
+            message = reason
+        } else {
+            message = "\(error)"
+        }
         return (Qcore.failurePrefix + message) as NSString
     }
 
@@ -26,6 +33,21 @@ class Qcore: NSObject {
             throw BridgeError(message: "the \(label) is not a whole number")
         }
         return parsed
+    }
+
+    @objc(generateSeed)
+    func rnGenerateSeed() -> NSString {
+        do { return try generateSeed() as NSString } catch { return failure(error) }
+    }
+
+    @objc(vmCallFee:meterLimit:)
+    func rnVmCallFee(_ transferFee: String, meterLimit: String) -> NSString {
+        do {
+            return try vmCallFee(
+                transferFee: transferFee,
+                meterLimit: try u64(meterLimit, "meter limit")
+            ) as NSString
+        } catch { return failure(error) }
     }
 
     @objc(mnemonicFromSeed:)
@@ -73,7 +95,7 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
-    @objc(signCall:index:target:argsHex:nonce:meterLimit:fee:chainId:validUntil:)
+    @objc(signCall:index:target:argsHex:nonce:meterLimit:fee:chainId:validUntil:transferFee:)
     func rnSignCall(
         _ seedHex: String,
         index: String,
@@ -83,7 +105,8 @@ class Qcore: NSObject {
         meterLimit: String,
         fee: String,
         chainId: String,
-        validUntil: String
+        validUntil: String,
+        transferFee: String
     ) -> NSString {
         do {
             return try signCall(
@@ -95,7 +118,8 @@ class Qcore: NSObject {
                 meterLimit: try u64(meterLimit, "meter limit"),
                 fee: fee,
                 chainId: try u64(chainId, "chain id"),
-                validUntil: try u64(validUntil, "valid until")
+                validUntil: try u64(validUntil, "valid until"),
+                transferFee: transferFee
             ) as NSString
         } catch { return failure(error) }
     }
@@ -121,7 +145,7 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
-    @objc(signPayableCall:index:target:argsHex:nonce:meterLimit:fee:value:chainId:validUntil:)
+    @objc(signPayableCall:index:target:argsHex:nonce:meterLimit:fee:value:chainId:validUntil:transferFee:)
     func rnSignPayableCall(
         _ seedHex: String,
         index: String,
@@ -132,7 +156,8 @@ class Qcore: NSObject {
         fee: String,
         value: String,
         chainId: String,
-        validUntil: String
+        validUntil: String,
+        transferFee: String
     ) -> NSString {
         do {
             return try signPayableCall(
@@ -145,12 +170,13 @@ class Qcore: NSObject {
                 fee: fee,
                 value: value,
                 chainId: try u64(chainId, "chain id"),
-                validUntil: try u64(validUntil, "valid until")
+                validUntil: try u64(validUntil, "valid until"),
+                transferFee: transferFee
             ) as NSString
         } catch { return failure(error) }
     }
 
-    @objc(signAssetCall:index:target:argsHex:assetIssuer:amount:nonce:meterLimit:fee:chainId:validUntil:)
+    @objc(signAssetCall:index:target:argsHex:assetIssuer:amount:nonce:meterLimit:fee:chainId:validUntil:transferFee:)
     func rnSignAssetCall(
         _ seedHex: String,
         index: String,
@@ -162,7 +188,8 @@ class Qcore: NSObject {
         meterLimit: String,
         fee: String,
         chainId: String,
-        validUntil: String
+        validUntil: String,
+        transferFee: String
     ) -> NSString {
         do {
             return try signAssetCall(
@@ -176,7 +203,8 @@ class Qcore: NSObject {
                 meterLimit: try u64(meterLimit, "meter limit"),
                 fee: fee,
                 chainId: try u64(chainId, "chain id"),
-                validUntil: try u64(validUntil, "valid until")
+                validUntil: try u64(validUntil, "valid until"),
+                transferFee: transferFee
             ) as NSString
         } catch { return failure(error) }
     }

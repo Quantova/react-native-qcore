@@ -5,6 +5,11 @@
 
 @interface RCT_EXTERN_MODULE(Qcore, NSObject)
 
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(generateSeed)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vmCallFee:(NSString *)transferFee
+                                        meterLimit:(NSString *)meterLimit)
+
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(mnemonicFromSeed:(NSString *)seedHex)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(seedFromMnemonic:(NSString *)phrase)
@@ -30,7 +35,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signCall:(NSString *)seedHex
                                         meterLimit:(NSString *)meterLimit
                                         fee:(NSString *)fee
                                         chainId:(NSString *)chainId
-                                        validUntil:(NSString *)validUntil)
+                                        validUntil:(NSString *)validUntil
+                                        transferFee:(NSString *)transferFee)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signRegister:(NSString *)seedHex
                                         index:(NSString *)index
@@ -48,7 +54,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signPayableCall:(NSString *)seedHex
                                         fee:(NSString *)fee
                                         value:(NSString *)value
                                         chainId:(NSString *)chainId
-                                        validUntil:(NSString *)validUntil)
+                                        validUntil:(NSString *)validUntil
+                                        transferFee:(NSString *)transferFee)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signAssetCall:(NSString *)seedHex
                                         index:(NSString *)index
@@ -60,7 +67,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signAssetCall:(NSString *)seedHex
                                         meterLimit:(NSString *)meterLimit
                                         fee:(NSString *)fee
                                         chainId:(NSString *)chainId
-                                        validUntil:(NSString *)validUntil)
+                                        validUntil:(NSString *)validUntil
+                                        transferFee:(NSString *)transferFee)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(chainIdFromName:(NSString *)name)
 
