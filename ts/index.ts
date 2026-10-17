@@ -245,6 +245,8 @@ interface QcoreNative {
   sessionCheckTarget(id: string, address: string): string;
   sessionSlot(id: string, key: string, reported: string, expected: string, order: boolean): string;
   sessionSigned(id: string, key: string, slot: string): string;
+  sessionRelease(id: string, key: string, slot: string): string;
+  sessionReleasePending(id: string, key: string): string;
   sessionOutcome(id: string, key: string, slot: string, accepted: boolean): string;
   sessionNextNonce(id: string, key: string): string;
   sessionIsHeld(id: string, key: string, slot: string): string;
@@ -884,6 +886,14 @@ export class SigningSession {
 
   signed(key: string, slot: bigint): void {
     native.sessionSigned(this.live(), key, u64(slot));
+  }
+
+  release(key: string, slot: bigint): void {
+    native.sessionRelease(this.live(), key, u64(slot));
+  }
+
+  releasePending(key: string): void {
+    native.sessionReleasePending(this.live(), key);
   }
 
   outcome(key: string, slot: bigint, accepted: boolean): void {

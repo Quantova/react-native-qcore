@@ -890,6 +890,14 @@ impl SigningSession {
         lock(&self.inner).signed(&key, slot)
     }
 
+    pub fn release(&self, key: String, slot: u64) {
+        lock(&self.inner).release(&key, slot)
+    }
+
+    pub fn release_pending(&self, key: String) {
+        lock(&self.inner).release_pending(&key)
+    }
+
     pub fn outcome(&self, key: String, slot: u64, accepted: bool) {
         lock(&self.inner).outcome(&key, slot, accepted)
     }
@@ -1329,6 +1337,29 @@ mod tests {
             "a head that leapt faster than blocks are made is refused"
         );
         assert!(bounded_valid_until(chain, 1_000, wall, Some(990), 5).is_ok());
+    }
+
+    #[test]
+    fn a_slot_is_reserved_until_it_is_signed_or_released() {
+        let session = SigningSession::new();
+        let key = address(seed(), 0).expect("derives");
+        assert_eq!(session.slot(key.clone(), 7, None, false).expect("free"), 7);
+        assert!(
+            session.slot(key.clone(), 7, None, false).is_err(),
+            "two flows never share a nonce"
+        );
+        session.release(key.clone(), 7);
+        assert_eq!(
+            session.slot(key.clone(), 7, None, false).expect("released"),
+            7
+        );
+        session.release_pending(key.clone());
+        assert_eq!(
+            session.slot(key.clone(), 7, None, false).expect("cleared"),
+            7
+        );
+        session.signed(key.clone(), 7);
+        assert!(session.slot(key.clone(), 7, None, false).is_err());
     }
 
     #[test]

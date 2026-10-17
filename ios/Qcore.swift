@@ -915,6 +915,22 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
+    @objc(sessionRelease:key:slot:)
+    func rnSessionRelease(_ id: String, key: String, slot: String) -> NSString {
+        do {
+            try session(id).release(key: key, slot: try u64(slot, "slot"))
+            return ""
+        } catch { return failure(error) }
+    }
+
+    @objc(sessionReleasePending:key:)
+    func rnSessionReleasePending(_ id: String, key: String) -> NSString {
+        do {
+            try session(id).releasePending(key: key)
+            return ""
+        } catch { return failure(error) }
+    }
+
     @objc(sessionOutcome:key:slot:accepted:)
     func rnSessionOutcome(_ id: String, key: String, slot: String, accepted: Bool) -> NSString {
         do {

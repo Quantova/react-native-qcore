@@ -211,6 +211,10 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionSlot:(NSString *)id
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionSigned:(NSString *)id key:(NSString *)key slot:(NSString *)slot)
 
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionRelease:(NSString *)id key:(NSString *)key slot:(NSString *)slot)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionReleasePending:(NSString *)id key:(NSString *)key)
+
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionOutcome:(NSString *)id
                                         key:(NSString *)key
                                         slot:(NSString *)slot

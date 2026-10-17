@@ -758,6 +758,18 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionRelease(id: String, key: String, slot: String): String = guarded {
+        session(id).release(key, u64(slot, "slot"))
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionReleasePending(id: String, key: String): String = guarded {
+        session(id).releasePending(key)
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
     fun sessionOutcome(id: String, key: String, slot: String, accepted: Boolean): String = guarded {
         session(id).outcome(key, u64(slot, "slot"), accepted)
         ""
