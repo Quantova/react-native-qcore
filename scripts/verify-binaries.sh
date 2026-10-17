@@ -15,9 +15,9 @@ BUILT=(
   "ios/generated"
 )
 
-if [[ "${1:-}" == "--publish" && "${GITHUB_ACTIONS:-}" != "true" ]]; then
-  echo "publishing runs only in the release workflow, which builds, sums and attests every native binary" >&2
-  exit 1
+PUBLISH=0
+if [[ "${1:-}" == "--publish" ]]; then
+  PUBLISH=1
 fi
 
 if [[ ! -s "$SUMS" ]]; then
@@ -49,3 +49,18 @@ fi
 
 check "$SUMS"
 echo "every native binary matches $SUMS"
+
+if [[ "$PUBLISH" == "1" ]]; then
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "publishing needs the gh command to confirm that every native binary was built and attested by the release workflow" >&2
+    exit 1
+  fi
+  REPO="Quantova/react-native-qcore"
+  while read -r built; do
+    if ! gh attestation verify "$built" --repo "$REPO" --signer-workflow "$REPO/.github/workflows/release.yml" >/dev/null 2>&1; then
+      echo "$built carries no attestation from the release workflow, refusing to publish it" >&2
+      exit 1
+    fi
+  done < <(awk '{ name = $2; sub(/^\*/, "", name); print name }' "$SUMS")
+  echo "every native binary is attested by the release workflow"
+fi
