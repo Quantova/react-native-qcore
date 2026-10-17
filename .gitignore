@@ -13,3 +13,4 @@ android/src/main/jniLibs/
 ios/generated/
 ios/*.xcframework/
 android/build/
+SHA256SUMS

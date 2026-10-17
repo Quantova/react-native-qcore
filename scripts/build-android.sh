@@ -17,9 +17,9 @@ cargo ndk \
   --target x86_64-linux-android \
   --output-dir "$JNI_LIBS" \
   --platform 24 \
-  build --release
+  build --release --locked
 
-cargo build --release --features cli --bin uniffi-bindgen
+cargo build --release --locked --features cli --bin uniffi-bindgen
 
 REF_SO="$JNI_LIBS/arm64-v8a/libquantova_qcore.so"
 ./target/release/uniffi-bindgen generate \

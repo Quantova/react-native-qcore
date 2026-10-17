@@ -13,9 +13,9 @@ SIM_TARGET="aarch64-apple-ios-sim"
 GENERATED="ios/generated"
 XCFRAMEWORK="ios/QuantovaQcore.xcframework"
 
-cargo build --release --target "$DEVICE_TARGET"
-cargo build --release --target "$SIM_TARGET"
-cargo build --release --features cli --bin uniffi-bindgen
+cargo build --release --locked --target "$DEVICE_TARGET"
+cargo build --release --locked --target "$SIM_TARGET"
+cargo build --release --locked --features cli --bin uniffi-bindgen
 
 mkdir -p "$GENERATED"
 ./target/release/uniffi-bindgen generate \

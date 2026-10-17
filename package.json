@@ -11,7 +11,9 @@
     "bindgen": "bash scripts/generate-bindings.sh",
     "build:android": "bash scripts/build-android.sh",
     "build:ios": "bash scripts/build-ios.sh",
-    "build:ts": "tsc -p tsconfig.json"
+    "build:ts": "tsc -p tsconfig.json",
+    "verify:binaries": "bash scripts/verify-binaries.sh",
+    "prepublishOnly": "bash scripts/verify-binaries.sh --publish"
   },
   "keywords": [
     "post-quantum",
@@ -50,6 +52,7 @@
     "ios/Qcore.mm",
     "ios/generated",
     "ios/QuantovaQcore.xcframework",
+    "SHA256SUMS",
     "react-native-qcore.podspec",
     "Cargo.toml",
     "src",

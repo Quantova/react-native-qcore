@@ -18,6 +18,7 @@ Pod::Spec.new do |s|
   s.source_files = "ios/**/*.{h,m,mm,swift}"
   s.preserve_paths = "ios/generated/quantova_qcoreFFI.modulemap"
   s.vendored_frameworks = "ios/QuantovaQcore.xcframework"
+  s.frameworks = "Security"
 
   s.pod_target_xcconfig = {
     "SWIFT_INCLUDE_PATHS" => "\"$(PODS_TARGET_SRCROOT)/ios/generated\"",
