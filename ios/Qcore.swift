@@ -29,7 +29,7 @@ class Qcore: NSObject {
     }
 
     private func u64(_ value: String, _ label: String) throws -> UInt64 {
-        guard let parsed = UInt64(value) else {
+        guard !value.isEmpty, value.utf8.allSatisfy({ $0 >= 0x30 && $0 <= 0x39 }), let parsed = UInt64(value) else {
             throw BridgeError(message: "the \(label) is not a whole number")
         }
         return parsed

@@ -14,7 +14,8 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     private class BridgeException(message: String) : Exception(message)
 
     private fun u64(value: String, label: String): ULong =
-        value.toULongOrNull() ?: throw BridgeException("the $label is not a whole number")
+        value.takeIf { v -> v.isNotEmpty() && v.all { it in '0'..'9' } }?.toULongOrNull()
+            ?: throw BridgeException("the $label is not a whole number")
 
     private fun failure(error: Throwable): String {
         val message = when (error) {
