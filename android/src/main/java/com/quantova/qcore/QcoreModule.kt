@@ -3,9 +3,13 @@
 
 package com.quantova.qcore
 
+import android.util.Base64
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import java.util.UUID
+import uniffi.quantova_qcore.SeedHandle
+import uniffi.quantova_qcore.SigningSession
 
 class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
@@ -13,9 +17,20 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
 
     private class BridgeException(message: String) : Exception(message)
 
+    private val store by lazy { SeedStore(reactApplicationContext) }
+
+    private val lock = Any()
+
+    private val held = HashMap<String, SeedHandle>()
+
+    private val sessions = HashMap<String, SigningSession>()
+
     private fun u64(value: String, label: String): ULong =
         value.takeIf { v -> v.isNotEmpty() && v.all { it in '0'..'9' } }?.toULongOrNull()
             ?: throw BridgeException("the $label is not a whole number")
+
+    private fun optionalU64(value: String, label: String): ULong? =
+        if (value.isEmpty()) null else u64(value, label)
 
     private fun failure(error: Throwable): String {
         val message = when (error) {
@@ -33,9 +48,138 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
             failure(error)
         }
 
+    private fun nibble(c: Char): Int = when (c) {
+        in '0'..'9' -> c - '0'
+        in 'a'..'f' -> c - 'a' + 10
+        in 'A'..'F' -> c - 'A' + 10
+        else -> -1
+    }
+
+    private fun hexBytes(hex: String, label: String): ByteArray {
+        var start = 0
+        var end = hex.length
+        while (start < end && hex[start].isWhitespace()) start++
+        while (end > start && hex[end - 1].isWhitespace()) end--
+        if ((end - start) % 2 != 0) throw BridgeException("the $label is not hex")
+        val out = ByteArray((end - start) / 2)
+        for (i in out.indices) {
+            val hi = nibble(hex[start + 2 * i])
+            val lo = nibble(hex[start + 2 * i + 1])
+            if (hi < 0 || lo < 0) {
+                out.fill(0)
+                throw BridgeException("the $label is not hex")
+            }
+            out[i] = ((hi shl 4) or lo).toByte()
+        }
+        return out
+    }
+
+    private fun hexOf(bytes: ByteArray): String {
+        val chars = CharArray(bytes.size * 2)
+        try {
+            for (i in bytes.indices) {
+                val b = bytes[i].toInt() and 0xff
+                chars[2 * i] = HEX[b ushr 4]
+                chars[2 * i + 1] = HEX[b and 0x0f]
+            }
+            return String(chars)
+        } finally {
+            chars.fill('\u0000')
+        }
+    }
+
+    private fun base64Bytes(text: String, label: String): ByteArray {
+        val ascii = text.toByteArray(Charsets.US_ASCII)
+        try {
+            return Base64.decode(ascii, Base64.NO_WRAP)
+        } catch (error: IllegalArgumentException) {
+            throw BridgeException("the $label is not base64")
+        } finally {
+            ascii.fill(0)
+        }
+    }
+
+    private fun base64Of(bytes: ByteArray): String {
+        val encoded = Base64.encode(bytes, Base64.NO_WRAP)
+        try {
+            return String(encoded, Charsets.US_ASCII)
+        } finally {
+            encoded.fill(0)
+        }
+    }
+
+    private inline fun <T> withSeedHex(seedHex: String, use: (ByteArray) -> T): T {
+        val seed = hexBytes(seedHex, "seed")
+        try {
+            return use(seed)
+        } finally {
+            seed.fill(0)
+        }
+    }
+
+    private fun checkedAlias(alias: String): String {
+        uniffi.quantova_qcore.checkSeedAlias(alias)
+        return alias
+    }
+
+    private fun release(handle: SeedHandle) {
+        handle.forget()
+        handle.destroy()
+    }
+
+    private fun handleFor(alias: String): SeedHandle = synchronized(lock) {
+        held[checkedAlias(alias)] ?: run {
+            val seed = store.load(alias) ?: throw BridgeException("no seed is stored under this alias")
+            try {
+                SeedHandle.fromSeedBytes(seed)
+            } finally {
+                seed.fill(0)
+            }
+        }.also { held[alias] = it }
+    }
+
+    private fun keep(alias: String, make: () -> SeedHandle) {
+        synchronized(lock) {
+            if (store.has(checkedAlias(alias))) {
+                throw BridgeException("a seed is already stored under this alias, forget it first")
+            }
+            val handle = make()
+            try {
+                val seed = handle.seedBytes()
+                try {
+                    store.save(alias, seed)
+                } finally {
+                    seed.fill(0)
+                }
+            } catch (error: Throwable) {
+                release(handle)
+                throw error
+            }
+            held.put(alias, handle)?.let { release(it) }
+        }
+    }
+
+    private fun session(id: String): SigningSession =
+        synchronized(lock) { sessions[id] } ?: throw BridgeException("no signing session is open under this id")
+
+    override fun invalidate() {
+        synchronized(lock) {
+            held.values.forEach { release(it) }
+            held.clear()
+            sessions.values.forEach { it.destroy() }
+            sessions.clear()
+        }
+        super.invalidate()
+    }
+
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun generateSeed(): String = guarded {
-        uniffi.quantova_qcore.generateSeed()
+        val seed = uniffi.quantova_qcore.generateSeed()
+        try {
+            hexOf(seed)
+        } finally {
+            seed.fill(0)
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -45,17 +189,36 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun mnemonicFromSeed(seedHex: String): String = guarded {
-        uniffi.quantova_qcore.mnemonicFromSeed(seedHex)
+        withSeedHex(seedHex) { seed ->
+            val phrase = uniffi.quantova_qcore.mnemonicFromSeed(seed)
+            try {
+                String(phrase, Charsets.UTF_8)
+            } finally {
+                phrase.fill(0)
+            }
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun seedFromMnemonic(phrase: String): String = guarded {
-        uniffi.quantova_qcore.seedFromMnemonic(phrase)
+        val bytes = phrase.toByteArray(Charsets.UTF_8)
+        try {
+            val seed = uniffi.quantova_qcore.seedFromMnemonic(bytes)
+            try {
+                hexOf(seed)
+            } finally {
+                seed.fill(0)
+            }
+        } finally {
+            bytes.fill(0)
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun address(seedHex: String, index: String): String = guarded {
-        uniffi.quantova_qcore.address(seedHex, u64(index, "index"))
+        withSeedHex(seedHex) { seed ->
+            uniffi.quantova_qcore.address(seed, u64(index, "index"))
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -93,16 +256,18 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         chainId: String,
         validUntil: String,
     ): String = guarded {
-        uniffi.quantova_qcore.signTransfer(
-            seedHex,
-            u64(index, "index"),
-            to,
-            amount,
-            u64(nonce, "nonce"),
-            fee,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-        )
+        withSeedHex(seedHex) { seed ->
+            uniffi.quantova_qcore.signTransfer(
+                seed,
+                u64(index, "index"),
+                to,
+                amount,
+                u64(nonce, "nonce"),
+                fee,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -118,18 +283,20 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         validUntil: String,
         transferFee: String,
     ): String = guarded {
-        uniffi.quantova_qcore.signCall(
-            seedHex,
-            u64(index, "index"),
-            target,
-            argsHex,
-            u64(nonce, "nonce"),
-            u64(meterLimit, "meter limit"),
-            fee,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-            transferFee,
-        )
+        withSeedHex(seedHex) { seed ->
+            uniffi.quantova_qcore.signCall(
+                seed,
+                u64(index, "index"),
+                target,
+                argsHex,
+                u64(nonce, "nonce"),
+                u64(meterLimit, "meter limit"),
+                fee,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+                transferFee,
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -141,14 +308,16 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         chainId: String,
         validUntil: String,
     ): String = guarded {
-        uniffi.quantova_qcore.signRegister(
-            seedHex,
-            u64(index, "index"),
-            u64(nonce, "nonce"),
-            fee,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-        )
+        withSeedHex(seedHex) { seed ->
+            uniffi.quantova_qcore.signRegister(
+                seed,
+                u64(index, "index"),
+                u64(nonce, "nonce"),
+                fee,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -170,19 +339,21 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         validUntil: String,
         transferFee: String,
     ): String = guarded {
-        uniffi.quantova_qcore.signPayableCall(
-            seedHex,
-            u64(index, "index"),
-            target,
-            argsHex,
-            u64(nonce, "nonce"),
-            u64(meterLimit, "meter limit"),
-            fee,
-            value,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-            transferFee,
-        )
+        withSeedHex(seedHex) { seed ->
+            uniffi.quantova_qcore.signPayableCall(
+                seed,
+                u64(index, "index"),
+                target,
+                argsHex,
+                u64(nonce, "nonce"),
+                u64(meterLimit, "meter limit"),
+                fee,
+                value,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+                transferFee,
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -200,20 +371,22 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         validUntil: String,
         transferFee: String,
     ): String = guarded {
-        uniffi.quantova_qcore.signAssetCall(
-            seedHex,
-            u64(index, "index"),
-            target,
-            argsHex,
-            assetIssuer,
-            amount,
-            u64(nonce, "nonce"),
-            u64(meterLimit, "meter limit"),
-            fee,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-            transferFee,
-        )
+        withSeedHex(seedHex) { seed ->
+            uniffi.quantova_qcore.signAssetCall(
+                seed,
+                u64(index, "index"),
+                target,
+                argsHex,
+                assetIssuer,
+                amount,
+                u64(nonce, "nonce"),
+                u64(meterLimit, "meter limit"),
+                fee,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+                transferFee,
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -236,8 +409,345 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         uniffi.quantova_qcore.scalarSlotKey(u64(slot, "slot"))
     }
 
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultCreate(alias: String): String = guarded {
+        keep(alias) { SeedHandle.generate() }
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultImportPhrase(alias: String, phraseBase64: String): String = guarded {
+        keep(alias) {
+            val phrase = base64Bytes(phraseBase64, "phrase")
+            try {
+                SeedHandle.fromPhraseBytes(phrase)
+            } finally {
+                phrase.fill(0)
+            }
+        }
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultImportSeed(alias: String, seedBase64: String): String = guarded {
+        keep(alias) {
+            val seed = base64Bytes(seedBase64, "seed")
+            try {
+                SeedHandle.fromSeedBytes(seed)
+            } finally {
+                seed.fill(0)
+            }
+        }
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultRevealPhrase(alias: String): String = guarded {
+        val phrase = handleFor(alias).phraseBytes()
+        try {
+            base64Of(phrase)
+        } finally {
+            phrase.fill(0)
+        }
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultHas(alias: String): String = guarded {
+        synchronized(lock) {
+            (held.containsKey(checkedAlias(alias)) || store.has(alias)).toString()
+        }
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultClose(alias: String): String = guarded {
+        synchronized(lock) { held.remove(checkedAlias(alias)) }?.let { release(it) }
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultForget(alias: String): String = guarded {
+        synchronized(lock) {
+            held.remove(checkedAlias(alias))?.let { release(it) }
+            store.remove(alias)
+        }
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultAddress(alias: String, index: String): String = guarded {
+        handleFor(alias).address(u64(index, "index"))
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultSignTransfer(
+        alias: String,
+        index: String,
+        to: String,
+        amount: String,
+        nonce: String,
+        fee: String,
+        chainId: String,
+        validUntil: String,
+        head: String,
+    ): String = guarded {
+        handleFor(alias).signTransfer(
+            u64(index, "index"),
+            to,
+            amount,
+            u64(nonce, "nonce"),
+            fee,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            u64(head, "head"),
+        )
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultSignCall(
+        alias: String,
+        index: String,
+        target: String,
+        argsHex: String,
+        nonce: String,
+        meterLimit: String,
+        fee: String,
+        chainId: String,
+        validUntil: String,
+        transferFee: String,
+        head: String,
+    ): String = guarded {
+        handleFor(alias).signCall(
+            u64(index, "index"),
+            target,
+            argsHex,
+            u64(nonce, "nonce"),
+            u64(meterLimit, "meter limit"),
+            fee,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            transferFee,
+            u64(head, "head"),
+        )
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultSignRegister(
+        alias: String,
+        index: String,
+        nonce: String,
+        fee: String,
+        chainId: String,
+        validUntil: String,
+        head: String,
+    ): String = guarded {
+        handleFor(alias).signRegister(
+            u64(index, "index"),
+            u64(nonce, "nonce"),
+            fee,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            u64(head, "head"),
+        )
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultSignPayableCall(
+        alias: String,
+        index: String,
+        target: String,
+        argsHex: String,
+        nonce: String,
+        meterLimit: String,
+        fee: String,
+        value: String,
+        chainId: String,
+        validUntil: String,
+        transferFee: String,
+        head: String,
+    ): String = guarded {
+        handleFor(alias).signPayableCall(
+            u64(index, "index"),
+            target,
+            argsHex,
+            u64(nonce, "nonce"),
+            u64(meterLimit, "meter limit"),
+            fee,
+            value,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            transferFee,
+            u64(head, "head"),
+        )
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultSignAssetCall(
+        alias: String,
+        index: String,
+        target: String,
+        argsHex: String,
+        assetIssuer: String,
+        amount: String,
+        nonce: String,
+        meterLimit: String,
+        fee: String,
+        chainId: String,
+        validUntil: String,
+        transferFee: String,
+        head: String,
+    ): String = guarded {
+        handleFor(alias).signAssetCall(
+            u64(index, "index"),
+            target,
+            argsHex,
+            assetIssuer,
+            amount,
+            u64(nonce, "nonce"),
+            u64(meterLimit, "meter limit"),
+            fee,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            transferFee,
+            u64(head, "head"),
+        )
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun checkValidUntil(validUntil: String, head: String): String = guarded {
+        uniffi.quantova_qcore.checkValidUntil(u64(validUntil, "valid until"), u64(head, "head"))
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun boundedValidUntil(
+        chainName: String,
+        head: String,
+        wallSecs: String,
+        floor: String,
+        floorAgeSecs: String,
+    ): String = guarded {
+        uniffi.quantova_qcore.boundedValidUntil(
+            chainName,
+            u64(head, "head"),
+            u64(wallSecs, "wall clock"),
+            optionalU64(floor, "floor"),
+            u64(floorAgeSecs, "floor age"),
+        ).toString()
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun headCeiling(chainName: String, wallSecs: String): String = guarded {
+        uniffi.quantova_qcore.headCeiling(chainName, u64(wallSecs, "wall clock")).toString()
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun genesisSecs(chainName: String): String = guarded {
+        uniffi.quantova_qcore.genesisSecs(chainName).toString()
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun maxValidityBlocks(): String = guarded {
+        uniffi.quantova_qcore.maxValidityBlocks().toString()
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun defaultValidityBlocks(): String = guarded {
+        uniffi.quantova_qcore.defaultValidityBlocks().toString()
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun checkOrderExpiry(expiry: String, nowSecs: String): String = guarded {
+        uniffi.quantova_qcore.checkOrderExpiry(u64(expiry, "order expiry"), u64(nowSecs, "wall clock"))
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun maxOrderLifetimeSecs(): String = guarded {
+        uniffi.quantova_qcore.maxOrderLifetimeSecs().toString()
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun verifyFinality(chainId: String, headerHex: String, certificateHex: String, rosterJson: String): String = guarded {
+        uniffi.quantova_qcore.verifyFinality(u64(chainId, "chain id"), headerHex, certificateHex, rosterJson)
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun verifyEvent(eventRootHex: String, leafHex: String, stepsJson: String): String = guarded {
+        uniffi.quantova_qcore.verifyEvent(eventRootHex, leafHex, stepsJson).toString()
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun decodeEvent(leafHex: String): String = guarded {
+        uniffi.quantova_qcore.decodeEvent(leafHex)
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionOpen(addressBook: String): String = guarded {
+        val book = addressBook.split(",").filter { it.isNotEmpty() }
+        val opened = if (book.isEmpty()) SigningSession() else SigningSession.withAddressBook(book)
+        val id = UUID.randomUUID().toString()
+        synchronized(lock) { sessions[id] = opened }
+        id
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionClose(id: String): String = guarded {
+        synchronized(lock) { sessions.remove(id) }?.destroy()
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionKnown(id: String): String = guarded {
+        session(id).known().joinToString(",")
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionRememberAddress(id: String, address: String): String = guarded {
+        session(id).rememberAddress(address)
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionCheckTarget(id: String, address: String): String = guarded {
+        session(id).checkTarget(address)
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionSlot(id: String, key: String, reported: String, expected: String, order: Boolean): String = guarded {
+        session(id).slot(
+            key,
+            u64(reported, "reported nonce"),
+            optionalU64(expected, "expected nonce"),
+            order,
+        ).toString()
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionSigned(id: String, key: String, slot: String): String = guarded {
+        session(id).signed(key, u64(slot, "slot"))
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionOutcome(id: String, key: String, slot: String, accepted: Boolean): String = guarded {
+        session(id).outcome(key, u64(slot, "slot"), accepted)
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionNextNonce(id: String, key: String): String = guarded {
+        session(id).nextNonce(key)?.toString() ?: ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun sessionIsHeld(id: String, key: String, slot: String): String = guarded {
+        session(id).isHeld(key, u64(slot, "slot")).toString()
+    }
+
     companion object {
         const val NAME = "Qcore"
         const val FAILURE_PREFIX = "\u0000QCORE_ERROR:"
+        private val HEX = "0123456789abcdef".toCharArray()
     }
 }

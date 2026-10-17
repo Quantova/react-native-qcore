@@ -74,6 +74,10 @@ export interface QCore {
   mapSlotKey(mapDomainTag: bigint, keyAddressHex: string): string;
   mapAddrWordKey(mapDomainTag: bigint, key32Hex: string, word: bigint): string;
   scalarSlotKey(slot: bigint): string;
+  checkOrderExpiry(expiry: bigint, nowSecs: bigint): void;
+  verifyFinality(chainId: bigint, headerHex: string, certificateHex: string, rosterJson: string): string;
+  verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): boolean;
+  decodeEvent(leafHex: string): string;
 }
 
 interface QcoreNative {
@@ -147,6 +151,103 @@ interface QcoreNative {
   mapSlotKey(mapDomainTag: string, keyAddressHex: string): string;
   mapAddrWordKey(mapDomainTag: string, key32Hex: string, word: string): string;
   scalarSlotKey(slot: string): string;
+  vaultCreate(alias: string): string;
+  vaultImportPhrase(alias: string, phraseBase64: string): string;
+  vaultImportSeed(alias: string, seedBase64: string): string;
+  vaultRevealPhrase(alias: string): string;
+  vaultHas(alias: string): string;
+  vaultClose(alias: string): string;
+  vaultForget(alias: string): string;
+  vaultAddress(alias: string, index: string): string;
+  vaultSignTransfer(
+    alias: string,
+    index: string,
+    to: string,
+    amount: string,
+    nonce: string,
+    fee: string,
+    chainId: string,
+    validUntil: string,
+    head: string,
+  ): string;
+  vaultSignCall(
+    alias: string,
+    index: string,
+    target: string,
+    argsHex: string,
+    nonce: string,
+    meterLimit: string,
+    fee: string,
+    chainId: string,
+    validUntil: string,
+    transferFee: string,
+    head: string,
+  ): string;
+  vaultSignRegister(
+    alias: string,
+    index: string,
+    nonce: string,
+    fee: string,
+    chainId: string,
+    validUntil: string,
+    head: string,
+  ): string;
+  vaultSignPayableCall(
+    alias: string,
+    index: string,
+    target: string,
+    argsHex: string,
+    nonce: string,
+    meterLimit: string,
+    fee: string,
+    value: string,
+    chainId: string,
+    validUntil: string,
+    transferFee: string,
+    head: string,
+  ): string;
+  vaultSignAssetCall(
+    alias: string,
+    index: string,
+    target: string,
+    argsHex: string,
+    assetIssuer: string,
+    amount: string,
+    nonce: string,
+    meterLimit: string,
+    fee: string,
+    chainId: string,
+    validUntil: string,
+    transferFee: string,
+    head: string,
+  ): string;
+  checkValidUntil(validUntil: string, head: string): string;
+  boundedValidUntil(
+    chainName: string,
+    head: string,
+    wallSecs: string,
+    floor: string,
+    floorAgeSecs: string,
+  ): string;
+  headCeiling(chainName: string, wallSecs: string): string;
+  genesisSecs(chainName: string): string;
+  maxValidityBlocks(): string;
+  defaultValidityBlocks(): string;
+  checkOrderExpiry(expiry: string, nowSecs: string): string;
+  maxOrderLifetimeSecs(): string;
+  verifyFinality(chainId: string, headerHex: string, certificateHex: string, rosterJson: string): string;
+  verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): string;
+  decodeEvent(leafHex: string): string;
+  sessionOpen(addressBook: string): string;
+  sessionClose(id: string): string;
+  sessionKnown(id: string): string;
+  sessionRememberAddress(id: string, address: string): string;
+  sessionCheckTarget(id: string, address: string): string;
+  sessionSlot(id: string, key: string, reported: string, expected: string, order: boolean): string;
+  sessionSigned(id: string, key: string, slot: string): string;
+  sessionOutcome(id: string, key: string, slot: string, accepted: boolean): string;
+  sessionNextNonce(id: string, key: string): string;
+  sessionIsHeld(id: string, key: string, slot: string): string;
 }
 
 const LINKING_ERROR =
@@ -189,6 +290,12 @@ function resolveNative(): QcoreNative {
 const native = resolveNative();
 
 const u64 = (value: bigint): string => value.toString(10);
+
+function verdict(value: string): boolean {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error('the native layer returned a malformed verdict');
+}
 
 export const nativeQCore: QCore = {
   generateSeed(): string {
@@ -342,7 +449,454 @@ export const nativeQCore: QCore = {
   scalarSlotKey(slot: bigint): string {
     return native.scalarSlotKey(u64(slot));
   },
+  checkOrderExpiry(expiry: bigint, nowSecs: bigint): void {
+    native.checkOrderExpiry(u64(expiry), u64(nowSecs));
+  },
+  verifyFinality(chainId: bigint, headerHex: string, certificateHex: string, rosterJson: string): string {
+    return native.verifyFinality(u64(chainId), headerHex, certificateHex, rosterJson);
+  },
+  verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): boolean {
+    return verdict(native.verifyEvent(eventRootHex, leafHex, stepsJson));
+  },
+  decodeEvent(leafHex: string): string {
+    return native.decodeEvent(leafHex);
+  },
 };
+
+export interface SecureQCore {
+  createSeed(alias: string): void;
+  importPhrase(alias: string, phrase: Uint8Array): void;
+  importSeed(alias: string, seed: Uint8Array): void;
+  revealPhrase(alias: string): Uint8Array;
+  hasSeed(alias: string): boolean;
+  closeSeed(alias: string): void;
+  forgetSeed(alias: string): void;
+  address(alias: string, index: bigint): string;
+  signTransfer(
+    alias: string,
+    index: bigint,
+    to: string,
+    amount: string,
+    nonce: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+    head: bigint,
+  ): string;
+  signCall(
+    alias: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+    transferFee: string,
+    head: bigint,
+  ): string;
+  signRegister(
+    alias: string,
+    index: bigint,
+    nonce: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+    head: bigint,
+  ): string;
+  signPayableCall(
+    alias: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    value: string,
+    chainId: bigint,
+    validUntil: bigint,
+    transferFee: string,
+    head: bigint,
+  ): string;
+  signAssetCall(
+    alias: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    assetIssuer: string,
+    amount: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+    transferFee: string,
+    head: bigint,
+  ): string;
+}
+
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function sextet(code: number): number {
+  if (code >= 65 && code <= 90) return code - 65;
+  if (code >= 97 && code <= 122) return code - 71;
+  if (code >= 48 && code <= 57) return code + 4;
+  if (code === 43) return 62;
+  if (code === 47) return 63;
+  return -1;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const left = bytes.length - i;
+    const triple = (bytes[i] << 16) | ((left > 1 ? bytes[i + 1] : 0) << 8) | (left > 2 ? bytes[i + 2] : 0);
+    out += BASE64_ALPHABET[(triple >> 18) & 63];
+    out += BASE64_ALPHABET[(triple >> 12) & 63];
+    out += left > 1 ? BASE64_ALPHABET[(triple >> 6) & 63] : '=';
+    out += left > 2 ? BASE64_ALPHABET[triple & 63] : '=';
+  }
+  return out;
+}
+
+function fromBase64(text: string): Uint8Array {
+  if (text.length % 4 !== 0) throw new Error('the native layer returned malformed base64');
+  const padding = text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0;
+  const out = new Uint8Array((text.length / 4) * 3 - padding);
+  let at = 0;
+  for (let i = 0; i < text.length; i += 4) {
+    let triple = 0;
+    for (let j = 0; j < 4; j += 1) {
+      const code = text.charCodeAt(i + j);
+      const value = code === 61 && i + j >= text.length - padding ? 0 : sextet(code);
+      if (value < 0) {
+        out.fill(0);
+        throw new Error('the native layer returned malformed base64');
+      }
+      triple = (triple << 6) | value;
+    }
+    if (at < out.length) out[at++] = (triple >> 16) & 255;
+    if (at < out.length) out[at++] = (triple >> 8) & 255;
+    if (at < out.length) out[at++] = triple & 255;
+  }
+  return out;
+}
+
+export function wipeBytes(bytes: Uint8Array): void {
+  bytes.fill(0);
+}
+
+export const secureQCore: SecureQCore = {
+  createSeed(alias: string): void {
+    native.vaultCreate(alias);
+  },
+  importPhrase(alias: string, phrase: Uint8Array): void {
+    native.vaultImportPhrase(alias, toBase64(phrase));
+  },
+  importSeed(alias: string, seed: Uint8Array): void {
+    native.vaultImportSeed(alias, toBase64(seed));
+  },
+  revealPhrase(alias: string): Uint8Array {
+    return fromBase64(native.vaultRevealPhrase(alias));
+  },
+  hasSeed(alias: string): boolean {
+    return native.vaultHas(alias) === 'true';
+  },
+  closeSeed(alias: string): void {
+    native.vaultClose(alias);
+  },
+  forgetSeed(alias: string): void {
+    native.vaultForget(alias);
+  },
+  address(alias: string, index: bigint): string {
+    return native.vaultAddress(alias, u64(index));
+  },
+  signTransfer(
+    alias: string,
+    index: bigint,
+    to: string,
+    amount: string,
+    nonce: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+    head: bigint,
+  ): string {
+    return native.vaultSignTransfer(
+      alias,
+      u64(index),
+      to,
+      amount,
+      u64(nonce),
+      fee,
+      u64(chainId),
+      u64(validUntil),
+      u64(head),
+    );
+  },
+  signCall(
+    alias: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+    transferFee: string,
+    head: bigint,
+  ): string {
+    return native.vaultSignCall(
+      alias,
+      u64(index),
+      target,
+      argsHex,
+      u64(nonce),
+      u64(meterLimit),
+      fee,
+      u64(chainId),
+      u64(validUntil),
+      transferFee,
+      u64(head),
+    );
+  },
+  signRegister(
+    alias: string,
+    index: bigint,
+    nonce: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+    head: bigint,
+  ): string {
+    return native.vaultSignRegister(
+      alias,
+      u64(index),
+      u64(nonce),
+      fee,
+      u64(chainId),
+      u64(validUntil),
+      u64(head),
+    );
+  },
+  signPayableCall(
+    alias: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    value: string,
+    chainId: bigint,
+    validUntil: bigint,
+    transferFee: string,
+    head: bigint,
+  ): string {
+    return native.vaultSignPayableCall(
+      alias,
+      u64(index),
+      target,
+      argsHex,
+      u64(nonce),
+      u64(meterLimit),
+      fee,
+      value,
+      u64(chainId),
+      u64(validUntil),
+      transferFee,
+      u64(head),
+    );
+  },
+  signAssetCall(
+    alias: string,
+    index: bigint,
+    target: string,
+    argsHex: string,
+    assetIssuer: string,
+    amount: string,
+    nonce: bigint,
+    meterLimit: bigint,
+    fee: string,
+    chainId: bigint,
+    validUntil: bigint,
+    transferFee: string,
+    head: bigint,
+  ): string {
+    return native.vaultSignAssetCall(
+      alias,
+      u64(index),
+      target,
+      argsHex,
+      assetIssuer,
+      amount,
+      u64(nonce),
+      u64(meterLimit),
+      fee,
+      u64(chainId),
+      u64(validUntil),
+      transferFee,
+      u64(head),
+    );
+  },
+};
+
+export function checkValidUntil(validUntil: bigint, head: bigint): void {
+  native.checkValidUntil(u64(validUntil), u64(head));
+}
+
+export function boundedValidUntil(
+  chainName: string,
+  head: bigint,
+  wallSecs: bigint,
+  floor: bigint | null,
+  floorAgeSecs: bigint,
+): bigint {
+  return BigInt(
+    native.boundedValidUntil(
+      chainName,
+      u64(head),
+      u64(wallSecs),
+      floor === null ? '' : u64(floor),
+      u64(floorAgeSecs),
+    ),
+  );
+}
+
+export function headCeiling(chainName: string, wallSecs: bigint): bigint {
+  return BigInt(native.headCeiling(chainName, u64(wallSecs)));
+}
+
+export function genesisSecs(chainName: string): bigint {
+  return BigInt(native.genesisSecs(chainName));
+}
+
+export function maxValidityBlocks(): bigint {
+  return BigInt(native.maxValidityBlocks());
+}
+
+export function defaultValidityBlocks(): bigint {
+  return BigInt(native.defaultValidityBlocks());
+}
+
+export function checkOrderExpiry(expiry: bigint, nowSecs: bigint): void {
+  native.checkOrderExpiry(u64(expiry), u64(nowSecs));
+}
+
+export function maxOrderLifetimeSecs(): bigint {
+  return BigInt(native.maxOrderLifetimeSecs());
+}
+
+export interface RosterMember {
+  id: number;
+  stake: string;
+  attest_pk: string;
+}
+
+export interface ProofStep {
+  sibling: string;
+  left: boolean;
+}
+
+export interface FinalizedHeader {
+  height: string;
+  hash: string;
+  parent_hash: string;
+  q_root: string;
+  transaction_root: string;
+  event_root: string;
+  time: string;
+  signed_stake: string;
+  total_stake: string;
+}
+
+export interface ChainEvent {
+  contract: string;
+  selector: string;
+  data: string;
+}
+
+export function verifyFinality(
+  chainId: bigint,
+  headerHex: string,
+  certificateHex: string,
+  roster: readonly RosterMember[],
+): FinalizedHeader {
+  const members = roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk }));
+  return JSON.parse(native.verifyFinality(u64(chainId), headerHex, certificateHex, JSON.stringify(members))) as FinalizedHeader;
+}
+
+export function verifyEvent(eventRootHex: string, leafHex: string, steps: readonly ProofStep[]): boolean {
+  const path = steps.map((s) => ({ sibling: s.sibling, left: s.left }));
+  return verdict(native.verifyEvent(eventRootHex, leafHex, JSON.stringify(path)));
+}
+
+export function decodeEvent(leafHex: string): ChainEvent {
+  return JSON.parse(native.decodeEvent(leafHex)) as ChainEvent;
+}
+
+export class SigningSession {
+  private id: string | null;
+
+  private constructor(id: string) {
+    this.id = id;
+  }
+
+  static open(addressBook: readonly string[] = []): SigningSession {
+    return new SigningSession(native.sessionOpen(addressBook.join(',')));
+  }
+
+  private live(): string {
+    if (this.id === null) throw new Error('this signing session is closed');
+    return this.id;
+  }
+
+  known(): string[] {
+    return native
+      .sessionKnown(this.live())
+      .split(',')
+      .filter((entry) => entry.length > 0);
+  }
+
+  rememberAddress(address: string): void {
+    native.sessionRememberAddress(this.live(), address);
+  }
+
+  checkTarget(address: string): void {
+    native.sessionCheckTarget(this.live(), address);
+  }
+
+  slot(key: string, reported: bigint, expected: bigint | null, order: boolean): bigint {
+    return BigInt(
+      native.sessionSlot(this.live(), key, u64(reported), expected === null ? '' : u64(expected), order),
+    );
+  }
+
+  signed(key: string, slot: bigint): void {
+    native.sessionSigned(this.live(), key, u64(slot));
+  }
+
+  outcome(key: string, slot: bigint, accepted: boolean): void {
+    native.sessionOutcome(this.live(), key, u64(slot), accepted);
+  }
+
+  nextNonce(key: string): bigint | null {
+    const next = native.sessionNextNonce(this.live(), key);
+    return next === '' ? null : BigInt(next);
+  }
+
+  isHeld(key: string, slot: bigint): boolean {
+    return native.sessionIsHeld(this.live(), key, u64(slot)) === 'true';
+  }
+
+  close(): void {
+    if (this.id === null) return;
+    native.sessionClose(this.id);
+    this.id = null;
+  }
+}
 
 export function registerQCore(setQCore: (instance: QCore) => void): void {
   setQCore(nativeQCore);
