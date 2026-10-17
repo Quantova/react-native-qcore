@@ -3,6 +3,7 @@
 
 package com.quantova.qcore
 
+import android.os.SystemClock
 import android.util.Base64
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -22,6 +23,17 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     private val lock = Any()
 
     private val held = HashMap<String, SeedHandle>()
+
+    private val heldAt = HashMap<String, Long>()
+
+    private fun expireIdle() {
+        val now = SystemClock.elapsedRealtime()
+        val stale = heldAt.filterValues { now - it > IDLE_MILLIS }.keys.toList()
+        for (alias in stale) {
+            held.remove(alias)?.let { release(it) }
+            heldAt.remove(alias)
+        }
+    }
 
     private val sessions = HashMap<String, SigningSession>()
 
@@ -128,7 +140,9 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     }
 
     private fun handleFor(alias: String): SeedHandle = synchronized(lock) {
-        held[checkedAlias(alias)] ?: run {
+        expireIdle()
+        heldAt[checkedAlias(alias)] = SystemClock.elapsedRealtime()
+        held[alias] ?: run {
             val seed = store.load(alias) ?: throw BridgeException("no seed is stored under this alias")
             try {
                 SeedHandle.fromSeedBytes(seed)
@@ -156,6 +170,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
                 throw error
             }
             held.put(alias, handle)?.let { release(it) }
+            heldAt[alias] = SystemClock.elapsedRealtime()
         }
     }
 
@@ -166,6 +181,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         synchronized(lock) {
             held.values.forEach { release(it) }
             held.clear()
+            heldAt.clear()
             sessions.values.forEach { it.destroy() }
             sessions.clear()
         }
@@ -443,11 +459,23 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultRevealPhrase(alias: String): String = guarded {
-        val phrase = handleFor(alias).phraseBytes()
+        val handle = synchronized(lock) {
+            val seed = store.load(checkedAlias(alias)) ?: throw BridgeException("no seed is stored under this alias")
+            try {
+                SeedHandle.fromSeedBytes(seed)
+            } finally {
+                seed.fill(0)
+            }
+        }
         try {
-            base64Of(phrase)
+            val phrase = handle.phraseBytes()
+            try {
+                base64Of(phrase)
+            } finally {
+                phrase.fill(0)
+            }
         } finally {
-            phrase.fill(0)
+            release(handle)
         }
     }
 
@@ -748,6 +776,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     companion object {
         const val NAME = "Qcore"
         const val FAILURE_PREFIX = "\u0000QCORE_ERROR:"
+        private const val IDLE_MILLIS = 120_000L
         private val HEX = "0123456789abcdef".toCharArray()
     }
 }

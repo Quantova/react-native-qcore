@@ -256,6 +256,14 @@ const LINKING_ERROR =
 
 const FAILURE_PREFIX = '\u0000QCORE_ERROR:';
 
+export class QCoreAuthenticationRequired extends Error {
+  readonly code = 'QCORE_AUTHENTICATION_REQUIRED';
+}
+
+function nativeError(message: string): Error {
+  return message.startsWith('authentication required') ? new QCoreAuthenticationRequired(message) : new Error(message);
+}
+
 function throwingOnFailure(module: QcoreNative): QcoreNative {
   return new Proxy(module, {
     get(target, property, receiver) {
@@ -264,7 +272,7 @@ function throwingOnFailure(module: QcoreNative): QcoreNative {
       return (...args: unknown[]) => {
         const result = (member as (...a: unknown[]) => unknown).apply(target, args);
         if (typeof result === 'string' && result.startsWith(FAILURE_PREFIX)) {
-          throw new Error(result.slice(FAILURE_PREFIX.length));
+          throw nativeError(result.slice(FAILURE_PREFIX.length));
         }
         return result;
       };

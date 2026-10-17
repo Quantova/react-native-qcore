@@ -21,6 +21,18 @@ class Qcore: NSObject {
 
     private var held: [String: SeedHandle] = [:]
 
+    private var heldAt: [String: TimeInterval] = [:]
+
+    private static let idleSeconds: TimeInterval = 120
+
+    private func expireIdle() {
+        let now = ProcessInfo.processInfo.systemUptime
+        for (alias, at) in heldAt where now - at > Self.idleSeconds {
+            held.removeValue(forKey: alias)?.forget()
+            heldAt.removeValue(forKey: alias)
+        }
+    }
+
     private var sessions: [String: SigningSession] = [:]
 
     private func failure(_ error: Error) -> NSString {
@@ -142,7 +154,7 @@ class Qcore: NSObject {
     }
 
     private enum Keychain {
-        static let service = "com.quantova.qcore.seed"
+        static let service = "com.quantova.qcore.seed.2"
 
         static func query(_ alias: String) -> [String: Any] {
             return [
@@ -169,12 +181,20 @@ class Qcore: NSObject {
         static func save(_ alias: String, _ seed: Data) throws {
             let box = NSMutableData(data: seed)
             defer { box.resetBytes(in: NSRange(location: 0, length: box.length)) }
+            var failed: Unmanaged<CFError>?
+            guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, .userPresence, &failed) else {
+                failed?.release()
+                throw BridgeError(message: "a seed needs a device passcode, set one and try again")
+            }
             var item = query(alias)
-            item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            item[kSecAttrAccessControl as String] = access
             item[kSecValueData as String] = box
             let status = SecItemAdd(item as CFDictionary, nil)
             if status == errSecDuplicateItem {
                 throw BridgeError(message: "a seed is already stored under this alias, forget it first")
+            }
+            if status == errSecAuthFailed || status == errSecNotAvailable {
+                throw BridgeError(message: "a seed needs a device passcode, set one and try again")
             }
             guard status == errSecSuccess else {
                 throw BridgeError(message: "the keychain refused to store the seed with status \(status)")
@@ -189,6 +209,9 @@ class Qcore: NSObject {
             let status = SecItemCopyMatching(search as CFDictionary, &found)
             if status == errSecItemNotFound {
                 throw BridgeError(message: "no seed is stored under this alias")
+            }
+            if status == errSecUserCanceled || status == errSecAuthFailed || status == errSecInteractionNotAllowed {
+                throw BridgeError(message: "authentication required, confirm the device passcode or biometric and try again")
             }
             guard status == errSecSuccess, let stored = found as? Data else {
                 throw BridgeError(message: "the keychain refused to read the seed with status \(status)")
@@ -207,13 +230,16 @@ class Qcore: NSObject {
     private func handleFor(_ alias: String) throws -> SeedHandle {
         return try locked {
             let alias = try checkedAlias(alias)
+            expireIdle()
             if let found = held[alias] {
+                heldAt[alias] = ProcessInfo.processInfo.systemUptime
                 return found
             }
             var seed = try Keychain.load(alias)
             defer { wipe(&seed) }
             let handle = try SeedHandle.fromSeedBytes(seed: seed)
             held[alias] = handle
+            heldAt[alias] = ProcessInfo.processInfo.systemUptime
             return handle
         }
     }
@@ -235,6 +261,7 @@ class Qcore: NSObject {
             }
             held[alias]?.forget()
             held[alias] = handle
+            heldAt[alias] = ProcessInfo.processInfo.systemUptime
         }
     }
 
@@ -251,6 +278,7 @@ class Qcore: NSObject {
                 handle.forget()
             }
             held.removeAll()
+            heldAt.removeAll()
             sessions.removeAll()
         }
     }
@@ -543,7 +571,12 @@ class Qcore: NSObject {
     @objc(vaultRevealPhrase:)
     func rnVaultRevealPhrase(_ alias: String) -> NSString {
         do {
-            var phrase = try handleFor(alias).phraseBytes()
+            let alias = try checkedAlias(alias)
+            var seed = try Keychain.load(alias)
+            defer { wipe(&seed) }
+            let handle = try SeedHandle.fromSeedBytes(seed: seed)
+            defer { handle.forget() }
+            var phrase = try handle.phraseBytes()
             defer { wipe(&phrase) }
             return phrase.base64EncodedString() as NSString
         } catch { return failure(error) }
