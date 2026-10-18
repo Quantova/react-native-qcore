@@ -1479,7 +1479,7 @@ mod tests {
             .expect("the handle registers");
         assert_eq!(
             register,
-            sign_register(seed(), 0, 0, "1".to_string(), 1, 300, 0,)
+            sign_register(seed(), 0, 0, "1".to_string(), 1, 300, 0)
                 .expect("the seed path registers")
         );
         let call = handle()
@@ -1579,6 +1579,94 @@ mod tests {
         assert!(held
             .sign_register(slotted(0, 0), 0, 0, "1".to_string(), 1, 5_000, 10)
             .is_err());
+    }
+
+    #[test]
+    fn every_free_signer_refuses_a_deadline_beyond_the_window_past_the_head() {
+        let to = address(seed(), 1).expect("derives");
+        let head = 1_000;
+        let within = head + max_validity_blocks();
+        let beyond = within + 1;
+        assert_eq!(max_validity_blocks(), 3_600);
+        let transfer = |valid_until: u64| {
+            sign_transfer(
+                seed(),
+                0,
+                to.clone(),
+                "5".to_string(),
+                0,
+                "1".to_string(),
+                1,
+                valid_until,
+                head,
+            )
+        };
+        let register =
+            |valid_until: u64| sign_register(seed(), 0, 0, "1".to_string(), 1, valid_until, head);
+        let call = |valid_until: u64| {
+            sign_call(
+                seed(),
+                0,
+                to.clone(),
+                String::new(),
+                0,
+                21_000,
+                "9000".to_string(),
+                1,
+                valid_until,
+                "500".to_string(),
+                head,
+            )
+        };
+        let payable = |valid_until: u64| {
+            sign_payable_call(
+                seed(),
+                0,
+                to.clone(),
+                String::new(),
+                0,
+                21_000,
+                "9000".to_string(),
+                "1".to_string(),
+                1,
+                valid_until,
+                "500".to_string(),
+                head,
+            )
+        };
+        let asset = |valid_until: u64| {
+            sign_asset_call(
+                seed(),
+                0,
+                to.clone(),
+                String::new(),
+                to.clone(),
+                "1".to_string(),
+                0,
+                21_000,
+                "9000".to_string(),
+                1,
+                valid_until,
+                "500".to_string(),
+                head,
+            )
+        };
+        assert!(transfer(within).is_ok());
+        assert!(register(within).is_ok());
+        assert!(call(within).is_ok());
+        assert!(payable(within).is_ok());
+        assert!(asset(within).is_ok());
+        for refused in [
+            transfer(beyond),
+            register(beyond),
+            call(beyond),
+            payable(beyond),
+            asset(beyond),
+        ] {
+            let message = refused.expect_err("a deadline beyond the window is refused");
+            assert!(message.to_string().contains("3600"), "{message}");
+        }
+        assert!(transfer(head).is_err(), "a deadline at the head has passed");
     }
 
     #[test]
