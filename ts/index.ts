@@ -832,6 +832,8 @@ export interface RosterMember {
   id: number;
   stake: string;
   attest_pk: string;
+  root: string;
+  root_slots: string;
 }
 
 export interface ProofStep {
@@ -863,7 +865,7 @@ export function verifyFinality(
   certificateHex: string,
   roster: readonly RosterMember[],
 ): FinalizedHeader {
-  const members = roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk }));
+  const members = roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk, root: m.root, root_slots: m.root_slots }));
   return JSON.parse(native.verifyFinality(u64(chainId), headerHex, certificateHex, JSON.stringify(members))) as FinalizedHeader;
 }
 
@@ -925,7 +927,7 @@ export function confirmTransaction(
   const rosterJson =
     typeof roster === 'string'
       ? roster
-      : JSON.stringify(roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk })));
+      : JSON.stringify(roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk, root: m.root, root_slots: m.root_slots })));
   const confirmed = JSON.parse(
     native.confirmTransaction(u64(chainId), txId, proofJson, finalityJson, rosterJson),
   ) as { tx_id: string; height: string; index: string; header: FinalizedHeader };

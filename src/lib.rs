@@ -507,40 +507,6 @@ pub fn max_order_lifetime_secs() -> u64 {
     qcore::contract::MAX_ORDER_LIFETIME_SECS
 }
 
-fn parse_roster(roster_json: &str) -> Result<Vec<qcore::finality::RosterMember>, String> {
-    let parsed = qcore::json::parse(roster_json)?;
-    let items = parsed
-        .as_array()
-        .ok_or_else(|| "the validator roster must be a JSON array".to_string())?;
-    let mut roster = Vec::with_capacity(items.len());
-    for item in items {
-        let id = item
-            .get("id")
-            .and_then(Json::as_u64)
-            .ok_or_else(|| "a roster member needs a numeric id".to_string())?;
-        let stake = item
-            .get("stake")
-            .and_then(Json::as_str)
-            .ok_or_else(|| "a roster member needs a stake as a digit string".to_string())?;
-        if !digits(stake) {
-            return Err("a roster stake is not a whole number".to_string());
-        }
-        let stake: u64 = stake
-            .parse()
-            .map_err(|_| "a roster stake is out of range".to_string())?;
-        let pk = item
-            .get("attest_pk")
-            .and_then(Json::as_str)
-            .ok_or_else(|| "a roster member needs an attest_pk".to_string())?;
-        roster.push(qcore::finality::RosterMember {
-            id,
-            stake,
-            attest_pk: from_hex(pk)?,
-        });
-    }
-    Ok(roster)
-}
-
 fn parse_steps(steps_json: &str) -> Result<Vec<([u8; 32], bool)>, String> {
     let parsed = qcore::json::parse(steps_json)?;
     let items = parsed
@@ -591,7 +557,7 @@ pub fn verify_finality(
 ) -> Result<String, QcoreError> {
     let header = from_hex(&header_hex).map_err(err)?;
     let certificate = from_hex(&certificate_hex).map_err(err)?;
-    let roster = parse_roster(&roster_json).map_err(err)?;
+    let roster = qcore::finality::parse_roster(&roster_json).map_err(err)?;
     let verified =
         qcore::finality::verify_finality(chain_id, &header, &certificate, &roster).map_err(err)?;
     Ok(finalized_json(&verified))
@@ -670,7 +636,7 @@ fn confirmed(
             .and_then(Json::as_str)
             .ok_or("the finality answer carries no certificate")?,
     )?;
-    let roster = parse_roster(roster_json)?;
+    let roster = qcore::finality::parse_roster(roster_json)?;
     let verified = qcore::finality::verify_finality(chain_id, &header, &certificate, &roster)?;
     if verified.height != height {
         return Err("the finalized header is not at the height the proof names".to_string());
@@ -1572,8 +1538,12 @@ mod tests {
     #[test]
     fn a_finality_check_refuses_a_malformed_roster_header_or_certificate() {
         let pk = "ab".repeat(1952);
-        let member =
-            |id: u64, stake: &str| format!(r#"{{"id":{id},"stake":"{stake}","attest_pk":"{pk}"}}"#);
+        let root = "cd".repeat(32);
+        let member = |id: u64, stake: &str| {
+            format!(
+                r#"{{"id":{id},"stake":"{stake}","attest_pk":"{pk}","root":"{root}","root_slots":"64"}}"#
+            )
+        };
         let header = "00".repeat(8);
         let run = |roster: String, header: &str, certificate: &str| {
             verify_finality(1, header.to_string(), certificate.to_string(), roster)
@@ -1588,7 +1558,7 @@ mod tests {
             &header,
             "00"
         )
-        .contains("out of range"));
+        .contains("in range"));
         assert!(run(
             format!("[{},{}]", member(1, "5"), member(1, "5")),
             &header,
@@ -1597,11 +1567,39 @@ mod tests {
         .contains("twice"));
         assert!(run(format!("[{}]", member(1, "0")), &header, "00").contains("no stake"));
         assert!(run(
-            r#"[{"id":1,"stake":"5","attest_pk":"abab"}]"#.to_string(),
+            format!(
+                r#"[{{"id":1,"stake":"5","attest_pk":"abab","root":"{root}","root_slots":"64"}}]"#
+            ),
             &header,
             "00"
         )
         .contains("ML-DSA-65"));
+        let without = |key: &str| {
+            let full = member(1, "5");
+            let field = if key == "root" {
+                format!(r#","root":"{root}""#)
+            } else {
+                r#","root_slots":"64""#.to_string()
+            };
+            format!("[{}]", full.replace(&field, ""))
+        };
+        assert!(run(without("root"), &header, "00").contains("sortition root"));
+        assert!(run(without("root_slots"), &header, "00").contains("root_slots"));
+        assert!(run(
+            format!("[{}]", member(1, "5").replace(&root, &"cd".repeat(31))),
+            &header,
+            "00"
+        )
+        .contains("32 bytes"));
+        assert!(run(
+            format!(
+                "[{}]",
+                member(1, "5").replace(r#""root_slots":"64""#, r#""root_slots":64"#)
+            ),
+            &header,
+            "00"
+        )
+        .contains("root_slots"));
         assert!(run(format!("[{}]", member(1, "5")), &header, "00").contains("header"));
         assert!(run(format!("[{}]", member(1, "5")), "0", "00").contains("hex"));
         assert!(run(format!("[{}]", member(1, "5")), &header, "zz").contains("hex"));
@@ -1625,8 +1623,87 @@ mod tests {
         format!(r#"{{"header_bytes":"{header}","certificate":"{certificate}"}}"#)
     }
 
+    const TX_ROOT: &str = "f501701d0d56127c864841db406827a96e8d1a83d61dd9357298db369f38f2e8";
+
+    fn tx_roster_with(pk: &str, root: &str, slots: &str) -> String {
+        format!(
+            r#"[{{"id":1,"stake":"1000","attest_pk":"{pk}","root":"{root}","root_slots":"{slots}"}}]"#
+        )
+    }
+
     fn tx_roster(pk: &str) -> String {
-        format!(r#"[{{"id":1,"stake":"1000","attest_pk":"{pk}"}}]"#)
+        tx_roster_with(pk, TX_ROOT, "64")
+    }
+
+    fn tx_flip(hex: &str, at: usize) -> String {
+        let mut out = hex.to_string();
+        let flipped = if &out[at..at + 1] == "0" { "1" } else { "0" };
+        out.replace_range(at..at + 1, flipped);
+        out
+    }
+
+    #[test]
+    fn a_finality_check_requires_every_signer_to_open_its_root() {
+        let run = |certificate: &str, roster: String| {
+            verify_finality(7, TX_HEADER.to_string(), certificate.to_string(), roster)
+        };
+        let verified = run(TX_CERTIFICATE, tx_roster(TX_ATTEST_PK)).expect("verified");
+        let parsed = qcore::json::parse(&verified).expect("json");
+        assert_eq!(
+            parsed.get("signed_stake").and_then(Json::as_str),
+            Some("1000")
+        );
+        let membership = |certificate: &str, roster: String| {
+            run(certificate, roster)
+                .unwrap_err()
+                .to_string()
+                .contains("committee membership")
+        };
+        let other_root = tx_flip(TX_ROOT, TX_ROOT.len() - 1);
+        assert!(membership(
+            TX_CERTIFICATE,
+            tx_roster_with(TX_ATTEST_PK, &other_root, "64")
+        ));
+        assert!(membership(
+            TX_CERTIFICATE,
+            tx_roster_with(TX_ATTEST_PK, &"00".repeat(32), "64")
+        ));
+        for slots in ["0", "1", "32", "128", "65536"] {
+            assert!(
+                membership(TX_CERTIFICATE, tx_roster_with(TX_ATTEST_PK, TX_ROOT, slots)),
+                "{slots}"
+            );
+        }
+        let position = 2 * 299;
+        let preimage = 2 * 315;
+        let sibling = 2 * 363;
+        for at in [position, preimage, preimage + 63, sibling, sibling + 63] {
+            assert!(
+                membership(&tx_flip(TX_CERTIFICATE, at), tx_roster(TX_ATTEST_PK)),
+                "{at}"
+            );
+        }
+        let finality = tx_finality(TX_HEADER, &tx_flip(TX_CERTIFICATE, preimage));
+        let refused = confirm_transaction(
+            7,
+            TX_ZERO.to_string(),
+            tx_proof(4242, LEAF_ZERO, &tx_steps(HASH_ONE, false)),
+            finality,
+            tx_roster(TX_ATTEST_PK),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("committee membership"));
+        let wrong = confirm_transaction(
+            7,
+            TX_ZERO.to_string(),
+            tx_proof(4242, LEAF_ZERO, &tx_steps(HASH_ONE, false)),
+            tx_finality(TX_HEADER, TX_CERTIFICATE),
+            tx_roster_with(TX_ATTEST_PK, &other_root, "64"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(wrong.contains("committee membership"));
     }
 
     #[test]
