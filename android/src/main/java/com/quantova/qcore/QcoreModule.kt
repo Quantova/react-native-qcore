@@ -27,6 +27,8 @@ class QcoreModule(reactContext: ReactApplicationContext) :
 
     private val store by lazy { SeedStore(reactApplicationContext) }
 
+    private val nonces by lazy { NonceStore(reactApplicationContext) }
+
     private val lock = Any()
 
     private val held = HashMap<String, SeedHandle>()
@@ -226,6 +228,18 @@ class QcoreModule(reactContext: ReactApplicationContext) :
 
     private fun session(id: String): SigningSession =
         synchronized(lock) { sessions[id] } ?: throw BridgeException("no signing session is open under this id")
+
+    private fun persist(session: SigningSession) {
+        synchronized(lock) {
+            for (account in session.savedAccounts()) nonces.save(account.key, account.state)
+        }
+    }
+
+    private inline fun <T> recorded(session: SigningSession, change: () -> T): T {
+        val out = change()
+        persist(session)
+        return out
+    }
 
     override fun onHostResume() {}
 
@@ -595,6 +609,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultSignTransfer(
         alias: String,
+        sessionId: String,
         index: String,
         to: String,
         amount: String,
@@ -604,21 +619,26 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         validUntil: String,
         head: String,
     ): String = guarded {
-        handleFor(alias).signTransfer(
-            u64(index, "index"),
-            to,
-            amount,
-            u64(nonce, "nonce"),
-            fee,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-            u64(head, "head"),
-        )
+        val session = session(sessionId)
+        recorded(session) {
+            handleFor(alias).signTransfer(
+                session,
+                u64(index, "index"),
+                to,
+                amount,
+                u64(nonce, "nonce"),
+                fee,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+                u64(head, "head"),
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultSignCall(
         alias: String,
+        sessionId: String,
         index: String,
         target: String,
         argsHex: String,
@@ -630,23 +650,28 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         transferFee: String,
         head: String,
     ): String = guarded {
-        handleFor(alias).signCall(
-            u64(index, "index"),
-            target,
-            argsHex,
-            u64(nonce, "nonce"),
-            u64(meterLimit, "meter limit"),
-            fee,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-            transferFee,
-            u64(head, "head"),
-        )
+        val session = session(sessionId)
+        recorded(session) {
+            handleFor(alias).signCall(
+                session,
+                u64(index, "index"),
+                target,
+                argsHex,
+                u64(nonce, "nonce"),
+                u64(meterLimit, "meter limit"),
+                fee,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+                transferFee,
+                u64(head, "head"),
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultSignRegister(
         alias: String,
+        sessionId: String,
         index: String,
         nonce: String,
         fee: String,
@@ -654,19 +679,24 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         validUntil: String,
         head: String,
     ): String = guarded {
-        handleFor(alias).signRegister(
-            u64(index, "index"),
-            u64(nonce, "nonce"),
-            fee,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-            u64(head, "head"),
-        )
+        val session = session(sessionId)
+        recorded(session) {
+            handleFor(alias).signRegister(
+                session,
+                u64(index, "index"),
+                u64(nonce, "nonce"),
+                fee,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+                u64(head, "head"),
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultSignPayableCall(
         alias: String,
+        sessionId: String,
         index: String,
         target: String,
         argsHex: String,
@@ -679,24 +709,29 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         transferFee: String,
         head: String,
     ): String = guarded {
-        handleFor(alias).signPayableCall(
-            u64(index, "index"),
-            target,
-            argsHex,
-            u64(nonce, "nonce"),
-            u64(meterLimit, "meter limit"),
-            fee,
-            value,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-            transferFee,
-            u64(head, "head"),
-        )
+        val session = session(sessionId)
+        recorded(session) {
+            handleFor(alias).signPayableCall(
+                session,
+                u64(index, "index"),
+                target,
+                argsHex,
+                u64(nonce, "nonce"),
+                u64(meterLimit, "meter limit"),
+                fee,
+                value,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+                transferFee,
+                u64(head, "head"),
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultSignAssetCall(
         alias: String,
+        sessionId: String,
         index: String,
         target: String,
         argsHex: String,
@@ -710,20 +745,24 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         transferFee: String,
         head: String,
     ): String = guarded {
-        handleFor(alias).signAssetCall(
-            u64(index, "index"),
-            target,
-            argsHex,
-            assetIssuer,
-            amount,
-            u64(nonce, "nonce"),
-            u64(meterLimit, "meter limit"),
-            fee,
-            u64(chainId, "chain id"),
-            u64(validUntil, "valid until"),
-            transferFee,
-            u64(head, "head"),
-        )
+        val session = session(sessionId)
+        recorded(session) {
+            handleFor(alias).signAssetCall(
+                session,
+                u64(index, "index"),
+                target,
+                argsHex,
+                assetIssuer,
+                amount,
+                u64(nonce, "nonce"),
+                u64(meterLimit, "meter limit"),
+                fee,
+                u64(chainId, "chain id"),
+                u64(validUntil, "valid until"),
+                transferFee,
+                u64(head, "head"),
+            )
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -818,6 +857,12 @@ class QcoreModule(reactContext: ReactApplicationContext) :
             if (sessions.size >= MAX_SESSIONS) throw BridgeException(TOO_MANY_SESSIONS)
         }
         val opened = if (book.isEmpty()) SigningSession() else SigningSession.withAddressBook(book)
+        try {
+            synchronized(lock) { nonces.loadAll().forEach { opened.restore(it) } }
+        } catch (error: Throwable) {
+            opened.destroy()
+            throw error
+        }
         val id = UUID.randomUUID().toString()
         val admitted = synchronized(lock) {
             (sessions.size < MAX_SESSIONS).also { if (it) sessions[id] = opened }
@@ -854,35 +899,42 @@ class QcoreModule(reactContext: ReactApplicationContext) :
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun sessionSlot(id: String, key: String, reported: String, expected: String, order: Boolean): String = guarded {
-        session(id).slot(
-            key,
-            u64(reported, "reported nonce"),
-            optionalU64(expected, "expected nonce"),
-            order,
-        ).toString()
+        val session = session(id)
+        recorded(session) {
+            session.slot(
+                key,
+                u64(reported, "reported nonce"),
+                optionalU64(expected, "expected nonce"),
+                order,
+            ).toString()
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun sessionSigned(id: String, key: String, slot: String): String = guarded {
-        session(id).signed(key, u64(slot, "slot"))
+        val session = session(id)
+        recorded(session) { session.signed(key, u64(slot, "slot")) }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun sessionRelease(id: String, key: String, slot: String): String = guarded {
-        session(id).release(key, u64(slot, "slot"))
+        val session = session(id)
+        recorded(session) { session.release(key, u64(slot, "slot")) }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun sessionReleasePending(id: String, key: String): String = guarded {
-        session(id).releasePending(key)
+        val session = session(id)
+        recorded(session) { session.releasePending(key) }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun sessionOutcome(id: String, key: String, slot: String, accepted: Boolean): String = guarded {
-        session(id).outcome(key, u64(slot, "slot"), accepted)
+        val session = session(id)
+        recorded(session) { session.outcome(key, u64(slot, "slot"), accepted) }
         ""
     }
 

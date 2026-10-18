@@ -113,6 +113,7 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultForget:(NSString *)alias)
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultAddress:(NSString *)alias index:(NSString *)index)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignTransfer:(NSString *)alias
+                                        sessionId:(NSString *)sessionId
                                         index:(NSString *)index
                                         to:(NSString *)to
                                         amount:(NSString *)amount
@@ -123,6 +124,7 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignTransfer:(NSString *)alias
                                         head:(NSString *)head)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignCall:(NSString *)alias
+                                        sessionId:(NSString *)sessionId
                                         index:(NSString *)index
                                         target:(NSString *)target
                                         argsHex:(NSString *)argsHex
@@ -135,6 +137,7 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignCall:(NSString *)alias
                                         head:(NSString *)head)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignRegister:(NSString *)alias
+                                        sessionId:(NSString *)sessionId
                                         index:(NSString *)index
                                         nonce:(NSString *)nonce
                                         fee:(NSString *)fee
@@ -143,6 +146,7 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignRegister:(NSString *)alias
                                         head:(NSString *)head)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignPayableCall:(NSString *)alias
+                                        sessionId:(NSString *)sessionId
                                         index:(NSString *)index
                                         target:(NSString *)target
                                         argsHex:(NSString *)argsHex
@@ -156,6 +160,7 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignPayableCall:(NSString *)alias
                                         head:(NSString *)head)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignAssetCall:(NSString *)alias
+                                        sessionId:(NSString *)sessionId
                                         index:(NSString *)index
                                         target:(NSString *)target
                                         argsHex:(NSString *)argsHex

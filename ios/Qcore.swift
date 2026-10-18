@@ -293,6 +293,74 @@ class Qcore: NSObject {
         }
     }
 
+    private enum NonceKeychain {
+        static let service = "com.quantova.qcore.nonces.1"
+        static let maxAccounts = 4096
+
+        static func query(_ account: String) -> [String: Any] {
+            return [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+            ]
+        }
+
+        static func loadAll() throws -> [String] {
+            let search: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitAll,
+            ]
+            var found: CFTypeRef?
+            let status = SecItemCopyMatching(search as CFDictionary, &found)
+            if status == errSecItemNotFound {
+                return []
+            }
+            guard status == errSecSuccess, let items = found as? [Data], items.count <= maxAccounts else {
+                throw BridgeError(message: "the saved nonce state could not be opened, so no signing session is opened")
+            }
+            return try items.map { item in
+                guard let text = String(data: item, encoding: .utf8) else {
+                    throw BridgeError(message: "the saved nonce state could not be opened, so no signing session is opened")
+                }
+                return text
+            }
+        }
+
+        static func save(_ account: String, _ state: String) throws {
+            let data = Data(state.utf8)
+            let update: [String: Any] = [
+                kSecValueData as String: data,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            ]
+            var status = SecItemUpdate(query(account) as CFDictionary, update as CFDictionary)
+            if status == errSecItemNotFound {
+                var item = query(account)
+                item[kSecValueData as String] = data
+                item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+                status = SecItemAdd(item as CFDictionary, nil)
+            }
+            guard status == errSecSuccess else {
+                throw BridgeError(message: "the nonce state could not be written, so nothing was signed")
+            }
+        }
+    }
+
+    private func persist(_ session: SigningSession) throws {
+        try locked {
+            for account in try session.savedAccounts() {
+                try NonceKeychain.save(account.key, account.state)
+            }
+        }
+    }
+
+    private func recorded<T>(_ session: SigningSession, _ change: () throws -> T) throws -> T {
+        let out = try change()
+        try persist(session)
+        return out
+    }
+
     private func handleFor(_ alias: String) throws -> SeedHandle {
         let alias = try checkedAlias(alias)
         let found: SeedHandle? = locked {
@@ -572,7 +640,9 @@ class Qcore: NSObject {
 
     @objc(chainIdFromName:)
     func rnChainIdFromName(_ name: String) -> NSString {
-        return String(chainIdFromName(name: name)) as NSString
+        do {
+            return String(try chainIdFromName(name: name)) as NSString
+        } catch { return failure(error) }
     }
 
     @objc(nameKey:)
@@ -718,9 +788,10 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
-    @objc(vaultSignTransfer:index:to:amount:nonce:fee:chainId:validUntil:head:)
+    @objc(vaultSignTransfer:sessionId:index:to:amount:nonce:fee:chainId:validUntil:head:)
     func rnVaultSignTransfer(
         _ alias: String,
+        sessionId: String,
         index: String,
         to: String,
         amount: String,
@@ -731,22 +802,27 @@ class Qcore: NSObject {
         head: String
     ) -> NSString {
         do {
-            return try handleFor(alias).signTransfer(
-                index: try u64(index, "index"),
-                to: to,
-                amount: amount,
-                nonce: try u64(nonce, "nonce"),
-                fee: fee,
-                chainId: try u64(chainId, "chain id"),
-                validUntil: try u64(validUntil, "valid until"),
-                head: try u64(head, "head")
-            ) as NSString
+            let session = try session(sessionId)
+            return try recorded(session) {
+                try handleFor(alias).signTransfer(
+                    session: session,
+                    index: try u64(index, "index"),
+                    to: to,
+                    amount: amount,
+                    nonce: try u64(nonce, "nonce"),
+                    fee: fee,
+                    chainId: try u64(chainId, "chain id"),
+                    validUntil: try u64(validUntil, "valid until"),
+                    head: try u64(head, "head")
+                ) as NSString
+            }
         } catch { return failure(error) }
     }
 
-    @objc(vaultSignCall:index:target:argsHex:nonce:meterLimit:fee:chainId:validUntil:transferFee:head:)
+    @objc(vaultSignCall:sessionId:index:target:argsHex:nonce:meterLimit:fee:chainId:validUntil:transferFee:head:)
     func rnVaultSignCall(
         _ alias: String,
+        sessionId: String,
         index: String,
         target: String,
         argsHex: String,
@@ -759,24 +835,29 @@ class Qcore: NSObject {
         head: String
     ) -> NSString {
         do {
-            return try handleFor(alias).signCall(
-                index: try u64(index, "index"),
-                target: target,
-                argsHex: argsHex,
-                nonce: try u64(nonce, "nonce"),
-                meterLimit: try u64(meterLimit, "meter limit"),
-                fee: fee,
-                chainId: try u64(chainId, "chain id"),
-                validUntil: try u64(validUntil, "valid until"),
-                transferFee: transferFee,
-                head: try u64(head, "head")
-            ) as NSString
+            let session = try session(sessionId)
+            return try recorded(session) {
+                try handleFor(alias).signCall(
+                    session: session,
+                    index: try u64(index, "index"),
+                    target: target,
+                    argsHex: argsHex,
+                    nonce: try u64(nonce, "nonce"),
+                    meterLimit: try u64(meterLimit, "meter limit"),
+                    fee: fee,
+                    chainId: try u64(chainId, "chain id"),
+                    validUntil: try u64(validUntil, "valid until"),
+                    transferFee: transferFee,
+                    head: try u64(head, "head")
+                ) as NSString
+            }
         } catch { return failure(error) }
     }
 
-    @objc(vaultSignRegister:index:nonce:fee:chainId:validUntil:head:)
+    @objc(vaultSignRegister:sessionId:index:nonce:fee:chainId:validUntil:head:)
     func rnVaultSignRegister(
         _ alias: String,
+        sessionId: String,
         index: String,
         nonce: String,
         fee: String,
@@ -785,20 +866,25 @@ class Qcore: NSObject {
         head: String
     ) -> NSString {
         do {
-            return try handleFor(alias).signRegister(
-                index: try u64(index, "index"),
-                nonce: try u64(nonce, "nonce"),
-                fee: fee,
-                chainId: try u64(chainId, "chain id"),
-                validUntil: try u64(validUntil, "valid until"),
-                head: try u64(head, "head")
-            ) as NSString
+            let session = try session(sessionId)
+            return try recorded(session) {
+                try handleFor(alias).signRegister(
+                    session: session,
+                    index: try u64(index, "index"),
+                    nonce: try u64(nonce, "nonce"),
+                    fee: fee,
+                    chainId: try u64(chainId, "chain id"),
+                    validUntil: try u64(validUntil, "valid until"),
+                    head: try u64(head, "head")
+                ) as NSString
+            }
         } catch { return failure(error) }
     }
 
-    @objc(vaultSignPayableCall:index:target:argsHex:nonce:meterLimit:fee:value:chainId:validUntil:transferFee:head:)
+    @objc(vaultSignPayableCall:sessionId:index:target:argsHex:nonce:meterLimit:fee:value:chainId:validUntil:transferFee:head:)
     func rnVaultSignPayableCall(
         _ alias: String,
+        sessionId: String,
         index: String,
         target: String,
         argsHex: String,
@@ -812,25 +898,30 @@ class Qcore: NSObject {
         head: String
     ) -> NSString {
         do {
-            return try handleFor(alias).signPayableCall(
-                index: try u64(index, "index"),
-                target: target,
-                argsHex: argsHex,
-                nonce: try u64(nonce, "nonce"),
-                meterLimit: try u64(meterLimit, "meter limit"),
-                fee: fee,
-                value: value,
-                chainId: try u64(chainId, "chain id"),
-                validUntil: try u64(validUntil, "valid until"),
-                transferFee: transferFee,
-                head: try u64(head, "head")
-            ) as NSString
+            let session = try session(sessionId)
+            return try recorded(session) {
+                try handleFor(alias).signPayableCall(
+                    session: session,
+                    index: try u64(index, "index"),
+                    target: target,
+                    argsHex: argsHex,
+                    nonce: try u64(nonce, "nonce"),
+                    meterLimit: try u64(meterLimit, "meter limit"),
+                    fee: fee,
+                    value: value,
+                    chainId: try u64(chainId, "chain id"),
+                    validUntil: try u64(validUntil, "valid until"),
+                    transferFee: transferFee,
+                    head: try u64(head, "head")
+                ) as NSString
+            }
         } catch { return failure(error) }
     }
 
-    @objc(vaultSignAssetCall:index:target:argsHex:assetIssuer:amount:nonce:meterLimit:fee:chainId:validUntil:transferFee:head:)
+    @objc(vaultSignAssetCall:sessionId:index:target:argsHex:assetIssuer:amount:nonce:meterLimit:fee:chainId:validUntil:transferFee:head:)
     func rnVaultSignAssetCall(
         _ alias: String,
+        sessionId: String,
         index: String,
         target: String,
         argsHex: String,
@@ -845,20 +936,24 @@ class Qcore: NSObject {
         head: String
     ) -> NSString {
         do {
-            return try handleFor(alias).signAssetCall(
-                index: try u64(index, "index"),
-                target: target,
-                argsHex: argsHex,
-                assetIssuer: assetIssuer,
-                amount: amount,
-                nonce: try u64(nonce, "nonce"),
-                meterLimit: try u64(meterLimit, "meter limit"),
-                fee: fee,
-                chainId: try u64(chainId, "chain id"),
-                validUntil: try u64(validUntil, "valid until"),
-                transferFee: transferFee,
-                head: try u64(head, "head")
-            ) as NSString
+            let session = try session(sessionId)
+            return try recorded(session) {
+                try handleFor(alias).signAssetCall(
+                    session: session,
+                    index: try u64(index, "index"),
+                    target: target,
+                    argsHex: argsHex,
+                    assetIssuer: assetIssuer,
+                    amount: amount,
+                    nonce: try u64(nonce, "nonce"),
+                    meterLimit: try u64(meterLimit, "meter limit"),
+                    fee: fee,
+                    chainId: try u64(chainId, "chain id"),
+                    validUntil: try u64(validUntil, "valid until"),
+                    transferFee: transferFee,
+                    head: try u64(head, "head")
+                ) as NSString
+            }
         } catch { return failure(error) }
     }
 
@@ -989,6 +1084,11 @@ class Qcore: NSObject {
                 throw BridgeError(message: Self.tooManySessions)
             }
             let opened = book.isEmpty ? SigningSession() : try SigningSession.withAddressBook(book: book)
+            try locked {
+                for state in try NonceKeychain.loadAll() {
+                    try opened.restore(state: state)
+                }
+            }
             let id = UUID().uuidString
             let admitted: Bool = locked {
                 guard sessions.count < Self.maxSessions else { return false }
@@ -1034,19 +1134,23 @@ class Qcore: NSObject {
     @objc(sessionSlot:key:reported:expected:order:)
     func rnSessionSlot(_ id: String, key: String, reported: String, expected: String, order: Bool) -> NSString {
         do {
-            return String(try session(id).slot(
-                key: key,
-                reported: try u64(reported, "reported nonce"),
-                expected: try optionalU64(expected, "expected nonce"),
-                order: order
-            )) as NSString
+            let session = try session(id)
+            return String(try recorded(session) {
+                try session.slot(
+                    key: key,
+                    reported: try u64(reported, "reported nonce"),
+                    expected: try optionalU64(expected, "expected nonce"),
+                    order: order
+                )
+            }) as NSString
         } catch { return failure(error) }
     }
 
     @objc(sessionSigned:key:slot:)
     func rnSessionSigned(_ id: String, key: String, slot: String) -> NSString {
         do {
-            try session(id).signed(key: key, slot: try u64(slot, "slot"))
+            let session = try session(id)
+            try recorded(session) { session.signed(key: key, slot: try u64(slot, "slot")) }
             return ""
         } catch { return failure(error) }
     }
@@ -1054,7 +1158,8 @@ class Qcore: NSObject {
     @objc(sessionRelease:key:slot:)
     func rnSessionRelease(_ id: String, key: String, slot: String) -> NSString {
         do {
-            try session(id).release(key: key, slot: try u64(slot, "slot"))
+            let session = try session(id)
+            try recorded(session) { session.release(key: key, slot: try u64(slot, "slot")) }
             return ""
         } catch { return failure(error) }
     }
@@ -1062,7 +1167,8 @@ class Qcore: NSObject {
     @objc(sessionReleasePending:key:)
     func rnSessionReleasePending(_ id: String, key: String) -> NSString {
         do {
-            try session(id).releasePending(key: key)
+            let session = try session(id)
+            try recorded(session) { session.releasePending(key: key) }
             return ""
         } catch { return failure(error) }
     }
@@ -1070,7 +1176,8 @@ class Qcore: NSObject {
     @objc(sessionOutcome:key:slot:accepted:)
     func rnSessionOutcome(_ id: String, key: String, slot: String, accepted: Bool) -> NSString {
         do {
-            try session(id).outcome(key: key, slot: try u64(slot, "slot"), accepted: accepted)
+            let session = try session(id)
+            try recorded(session) { session.outcome(key: key, slot: try u64(slot, "slot"), accepted: accepted) }
             return ""
         } catch { return failure(error) }
     }

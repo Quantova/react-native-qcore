@@ -164,6 +164,7 @@ interface QcoreNative {
   vaultAddress(alias: string, index: string): string;
   vaultSignTransfer(
     alias: string,
+    sessionId: string,
     index: string,
     to: string,
     amount: string,
@@ -175,6 +176,7 @@ interface QcoreNative {
   ): string;
   vaultSignCall(
     alias: string,
+    sessionId: string,
     index: string,
     target: string,
     argsHex: string,
@@ -188,6 +190,7 @@ interface QcoreNative {
   ): string;
   vaultSignRegister(
     alias: string,
+    sessionId: string,
     index: string,
     nonce: string,
     fee: string,
@@ -197,6 +200,7 @@ interface QcoreNative {
   ): string;
   vaultSignPayableCall(
     alias: string,
+    sessionId: string,
     index: string,
     target: string,
     argsHex: string,
@@ -211,6 +215,7 @@ interface QcoreNative {
   ): string;
   vaultSignAssetCall(
     alias: string,
+    sessionId: string,
     index: string,
     target: string,
     argsHex: string,
@@ -507,6 +512,7 @@ export interface SecureQCore {
   address(alias: string, index: bigint): string;
   signTransfer(
     alias: string,
+    session: SigningSession,
     index: bigint,
     to: string,
     amount: string,
@@ -518,6 +524,7 @@ export interface SecureQCore {
   ): string;
   signCall(
     alias: string,
+    session: SigningSession,
     index: bigint,
     target: string,
     argsHex: string,
@@ -531,6 +538,7 @@ export interface SecureQCore {
   ): string;
   signRegister(
     alias: string,
+    session: SigningSession,
     index: bigint,
     nonce: bigint,
     fee: string,
@@ -540,6 +548,7 @@ export interface SecureQCore {
   ): string;
   signPayableCall(
     alias: string,
+    session: SigningSession,
     index: bigint,
     target: string,
     argsHex: string,
@@ -554,6 +563,7 @@ export interface SecureQCore {
   ): string;
   signAssetCall(
     alias: string,
+    session: SigningSession,
     index: bigint,
     target: string,
     argsHex: string,
@@ -653,6 +663,7 @@ export const secureQCore: SecureQCore = {
   },
   signTransfer(
     alias: string,
+    session: SigningSession,
     index: bigint,
     to: string,
     amount: string,
@@ -664,6 +675,7 @@ export const secureQCore: SecureQCore = {
   ): string {
     return native.vaultSignTransfer(
       alias,
+      sessionIdOf(session),
       u64(index),
       to,
       amount,
@@ -676,6 +688,7 @@ export const secureQCore: SecureQCore = {
   },
   signCall(
     alias: string,
+    session: SigningSession,
     index: bigint,
     target: string,
     argsHex: string,
@@ -689,6 +702,7 @@ export const secureQCore: SecureQCore = {
   ): string {
     return native.vaultSignCall(
       alias,
+      sessionIdOf(session),
       u64(index),
       target,
       argsHex,
@@ -703,6 +717,7 @@ export const secureQCore: SecureQCore = {
   },
   signRegister(
     alias: string,
+    session: SigningSession,
     index: bigint,
     nonce: bigint,
     fee: string,
@@ -712,6 +727,7 @@ export const secureQCore: SecureQCore = {
   ): string {
     return native.vaultSignRegister(
       alias,
+      sessionIdOf(session),
       u64(index),
       u64(nonce),
       fee,
@@ -722,6 +738,7 @@ export const secureQCore: SecureQCore = {
   },
   signPayableCall(
     alias: string,
+    session: SigningSession,
     index: bigint,
     target: string,
     argsHex: string,
@@ -736,6 +753,7 @@ export const secureQCore: SecureQCore = {
   ): string {
     return native.vaultSignPayableCall(
       alias,
+      sessionIdOf(session),
       u64(index),
       target,
       argsHex,
@@ -751,6 +769,7 @@ export const secureQCore: SecureQCore = {
   },
   signAssetCall(
     alias: string,
+    session: SigningSession,
     index: bigint,
     target: string,
     argsHex: string,
@@ -766,6 +785,7 @@ export const secureQCore: SecureQCore = {
   ): string {
     return native.vaultSignAssetCall(
       alias,
+      sessionIdOf(session),
       u64(index),
       target,
       argsHex,
@@ -939,11 +959,20 @@ export function decodeEvent(leafHex: string): ChainEvent {
   return JSON.parse(native.decodeEvent(leafHex)) as ChainEvent;
 }
 
+const sessionIds = new WeakMap<SigningSession, () => string>();
+
+function sessionIdOf(session: SigningSession): string {
+  const live = sessionIds.get(session);
+  if (!live) throw new Error('the vault signs only with a signing session opened by this module');
+  return live();
+}
+
 export class SigningSession {
   private id: string | null;
 
   private constructor(id: string) {
     this.id = id;
+    sessionIds.set(this, () => this.live());
   }
 
   static open(addressBook: readonly string[] = []): SigningSession {
