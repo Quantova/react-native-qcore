@@ -14,6 +14,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import uniffi.quantova_qcore.NonceRecord
 import uniffi.quantova_qcore.SeedHandle
 import uniffi.quantova_qcore.SigningSession
 
@@ -40,6 +41,9 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     }
 
     private var idleTimer: ScheduledFuture<*>? = null
+
+    @Volatile
+    private var closed = false
 
     private val revealGate by lazy { RevealGate() }
 
@@ -189,23 +193,42 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         handle.destroy()
     }
 
+    private fun ensureOpen() {
+        if (closed) throw BridgeException(CLOSED)
+    }
+
+    private fun hold(alias: String, handle: SeedHandle) {
+        try {
+            touch(alias)
+        } catch (error: Throwable) {
+            heldAt.remove(alias)
+            release(handle)
+            throw error
+        }
+        held.put(alias, handle)?.let { if (it !== handle) release(it) }
+    }
+
     private fun handleFor(alias: String): SeedHandle = synchronized(lock) {
+        ensureOpen()
         checkedAlias(alias)
         expireIdle()
-        val handle = held[alias] ?: run {
-            val seed = store.load(alias) ?: throw BridgeException("no seed is stored under this alias")
-            try {
-                SeedHandle.fromSeedBytes(seed)
-            } finally {
-                seed.fill(0)
-            }
-        }.also { held[alias] = it }
-        touch(alias)
+        held[alias]?.let { found ->
+            touch(alias)
+            return@synchronized found
+        }
+        val seed = store.load(alias) ?: throw BridgeException("no seed is stored under this alias")
+        val handle = try {
+            SeedHandle.fromSeedBytes(seed)
+        } finally {
+            seed.fill(0)
+        }
+        hold(alias, handle)
         handle
     }
 
     private fun keep(alias: String, make: () -> SeedHandle) {
         synchronized(lock) {
+            ensureOpen()
             if (store.has(checkedAlias(alias))) {
                 throw BridgeException("a seed is already stored under this alias, forget it first")
             }
@@ -221,24 +244,67 @@ class QcoreModule(reactContext: ReactApplicationContext) :
                 release(handle)
                 throw error
             }
-            held.put(alias, handle)?.let { release(it) }
-            touch(alias)
+            hold(alias, handle)
         }
     }
 
     private fun session(id: String): SigningSession =
-        synchronized(lock) { sessions[id] } ?: throw BridgeException("no signing session is open under this id")
-
-    private fun persist(session: SigningSession) {
         synchronized(lock) {
-            for (account in session.savedAccounts()) nonces.save(account.key, account.state)
+            ensureOpen()
+            sessions[id]
+        } ?: throw BridgeException("no signing session is open under this id")
+
+    private fun restoreNonces() {
+        if (uniffi.quantova_qcore.nonceLedgerRestored()) return
+        val present = nonces.manifestPresent()
+        val manifest = if (present) nonces.loadManifest() else null
+        var damaged = present && manifest == null
+        val accounts = if (manifest == null) {
+            emptyList()
+        } else {
+            try {
+                uniffi.quantova_qcore.nonceManifestAccounts(manifest)
+            } catch (error: Throwable) {
+                damaged = true
+                emptyList()
+            }
+        }
+        val listed = accounts.map { NonceRecord(it, nonces.load(it)) }
+        uniffi.quantova_qcore.restoreNonceLedger(manifest, damaged, listed, nonces.unlisted(accounts))
+    }
+
+    private fun persistNonces() {
+        for (account in uniffi.quantova_qcore.nonceChanges()) {
+            val save = uniffi.quantova_qcore.nonceSave(account, nonces.load(account))
+            nonces.save(account, save.state)
+            nonces.saveManifest(save.manifest)
+            uniffi.quantova_qcore.nonceWritten(account, save.generation)
         }
     }
 
-    private inline fun <T> recorded(session: SigningSession, change: () -> T): T {
+    private inline fun <T> recorded(change: () -> T): T = synchronized(NONCE_LOCK) {
+        ensureOpen()
+        restoreNonces()
         val out = change()
-        persist(session)
-        return out
+        persistNonces()
+        out
+    }
+
+    private fun resetTarget(chainId: String, key: String): Pair<ULong, String>? = when {
+        chainId.isEmpty() && key.isEmpty() -> null
+        chainId.isNotEmpty() && key.isNotEmpty() -> u64(chainId, "chain id") to key
+        else -> throw BridgeException("name both the chain id and the key to reset one account, or neither to reset every account")
+    }
+
+    private fun resetNow(chainId: String, key: String) {
+        val target = resetTarget(chainId, key)
+        synchronized(NONCE_LOCK) {
+            ensureOpen()
+            restoreNonces()
+            val reset = uniffi.quantova_qcore.resetNonceState(target?.first, target?.second)
+            if (target == null) nonces.clear() else reset.removed.forEach { nonces.remove(it) }
+            nonces.saveManifest(reset.manifest)
+        }
     }
 
     override fun onHostResume() {}
@@ -254,6 +320,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     override fun invalidate() {
         reactApplicationContext.removeLifecycleEventListener(this)
         synchronized(lock) {
+            closed = true
             forgetHeld()
             sessions.values.forEach { it.destroy() }
             sessions.clear()
@@ -545,6 +612,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     fun vaultRevealPhrase(alias: String, title: String, subtitle: String, promise: Promise) {
         val activity = try {
             synchronized(lock) {
+                ensureOpen()
                 if (!store.has(checkedAlias(alias))) throw BridgeException("no seed is stored under this alias")
             }
             reactApplicationContext.currentActivity
@@ -562,8 +630,49 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    @ReactMethod
+    fun vaultResetNonceState(alias: String, chainId: String, key: String, title: String, subtitle: String, promise: Promise) {
+        val activity = try {
+            resetTarget(chainId, key)
+            synchronized(lock) {
+                ensureOpen()
+                if (!store.has(checkedAlias(alias))) throw BridgeException("no seed is stored under this alias")
+            }
+            reactApplicationContext.currentActivity
+                ?: throw BridgeException("the nonce state can be reset only while the app is in the foreground")
+        } catch (error: Throwable) {
+            promise.resolve(failure(error))
+            return
+        }
+        revealGate.authorize(
+            activity,
+            title.ifEmpty { RESET_TITLE },
+            subtitle,
+            RESET_CANCELLED,
+            RESET_UNSUPPORTED,
+        ) { refused ->
+            try {
+                worker.execute {
+                    promise.resolve(
+                        if (refused != null) {
+                            failure(refused)
+                        } else {
+                            guarded {
+                                resetNow(chainId, key)
+                                ""
+                            }
+                        },
+                    )
+                }
+            } catch (error: Throwable) {
+                promise.resolve(failure(error))
+            }
+        }
+    }
+
     private fun revealNow(alias: String): String {
         val handle = synchronized(lock) {
+            ensureOpen()
             val seed = store.load(checkedAlias(alias)) ?: throw BridgeException("no seed is stored under this alias")
             try {
                 SeedHandle.fromSeedBytes(seed)
@@ -586,25 +695,33 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultHas(alias: String): String = guarded {
         synchronized(lock) {
+            ensureOpen()
             (held.containsKey(checkedAlias(alias)) || store.has(alias)).toString()
         }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultClose(alias: String): String = guarded {
-        synchronized(lock) { drop(checkedAlias(alias)) }
+        synchronized(lock) {
+            ensureOpen()
+            drop(checkedAlias(alias))
+        }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultCloseAll(): String = guarded {
-        synchronized(lock) { forgetHeld() }
+        synchronized(lock) {
+            ensureOpen()
+            forgetHeld()
+        }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultForget(alias: String): String = guarded {
         synchronized(lock) {
+            ensureOpen()
             drop(checkedAlias(alias))
             store.remove(alias)
         }
@@ -630,7 +747,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
     ): String = guarded {
         val session = session(sessionId)
-        recorded(session) {
+        recorded {
             handleFor(alias).signTransfer(
                 session,
                 u64(index, "index"),
@@ -661,7 +778,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
     ): String = guarded {
         val session = session(sessionId)
-        recorded(session) {
+        recorded {
             handleFor(alias).signCall(
                 session,
                 u64(index, "index"),
@@ -690,7 +807,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
     ): String = guarded {
         val session = session(sessionId)
-        recorded(session) {
+        recorded {
             handleFor(alias).signRegister(
                 session,
                 u64(index, "index"),
@@ -720,7 +837,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
     ): String = guarded {
         val session = session(sessionId)
-        recorded(session) {
+        recorded {
             handleFor(alias).signPayableCall(
                 session,
                 u64(index, "index"),
@@ -756,7 +873,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
     ): String = guarded {
         val session = session(sessionId)
-        recorded(session) {
+        recorded {
             handleFor(alias).signAssetCall(
                 session,
                 u64(index, "index"),
@@ -864,22 +981,18 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     fun sessionOpen(addressBook: String): String = guarded {
         val book = addressBook.split(",").filter { it.isNotEmpty() }
         synchronized(lock) {
+            ensureOpen()
             if (sessions.size >= MAX_SESSIONS) throw BridgeException(TOO_MANY_SESSIONS)
         }
+        synchronized(NONCE_LOCK) { restoreNonces() }
         val opened = if (book.isEmpty()) SigningSession() else SigningSession.withAddressBook(book)
-        try {
-            synchronized(lock) { nonces.loadAll().forEach { opened.restore(it) } }
-        } catch (error: Throwable) {
-            opened.destroy()
-            throw error
-        }
         val id = UUID.randomUUID().toString()
         val admitted = synchronized(lock) {
-            (sessions.size < MAX_SESSIONS).also { if (it) sessions[id] = opened }
+            (!closed && sessions.size < MAX_SESSIONS).also { if (it) sessions[id] = opened }
         }
         if (!admitted) {
             opened.destroy()
-            throw BridgeException(TOO_MANY_SESSIONS)
+            throw BridgeException(if (closed) CLOSED else TOO_MANY_SESSIONS)
         }
         id
     }
@@ -908,10 +1021,11 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun sessionSlot(id: String, key: String, reported: String, expected: String, order: Boolean): String = guarded {
+    fun sessionSlot(id: String, chainId: String, key: String, reported: String, expected: String, order: Boolean): String = guarded {
         val session = session(id)
-        recorded(session) {
+        recorded {
             session.slot(
+                u64(chainId, "chain id"),
                 key,
                 u64(reported, "reported nonce"),
                 optionalU64(expected, "expected nonce"),
@@ -921,41 +1035,41 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun sessionSigned(id: String, key: String, slot: String): String = guarded {
+    fun sessionSigned(id: String, chainId: String, key: String, slot: String): String = guarded {
         val session = session(id)
-        recorded(session) { session.signed(key, u64(slot, "slot")) }
+        recorded { session.signed(u64(chainId, "chain id"), key, u64(slot, "slot")) }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun sessionRelease(id: String, key: String, slot: String): String = guarded {
+    fun sessionRelease(id: String, chainId: String, key: String, slot: String): String = guarded {
         val session = session(id)
-        recorded(session) { session.release(key, u64(slot, "slot")) }
+        recorded { session.release(u64(chainId, "chain id"), key, u64(slot, "slot")) }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun sessionReleasePending(id: String, key: String): String = guarded {
+    fun sessionReleasePending(id: String, chainId: String, key: String): String = guarded {
         val session = session(id)
-        recorded(session) { session.releasePending(key) }
+        recorded { session.releasePending(u64(chainId, "chain id"), key) }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun sessionOutcome(id: String, key: String, slot: String, accepted: Boolean): String = guarded {
+    fun sessionOutcome(id: String, chainId: String, key: String, slot: String, accepted: Boolean): String = guarded {
         val session = session(id)
-        recorded(session) { session.outcome(key, u64(slot, "slot"), accepted) }
+        recorded { session.outcome(u64(chainId, "chain id"), key, u64(slot, "slot"), accepted) }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun sessionNextNonce(id: String, key: String): String = guarded {
-        session(id).nextNonce(key)?.toString() ?: ""
+    fun sessionNextNonce(id: String, chainId: String, key: String): String = guarded {
+        session(id).nextNonce(u64(chainId, "chain id"), key)?.toString() ?: ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun sessionIsHeld(id: String, key: String, slot: String): String = guarded {
-        session(id).isHeld(key, u64(slot, "slot")).toString()
+    fun sessionIsHeld(id: String, chainId: String, key: String, slot: String): String = guarded {
+        session(id).isHeld(u64(chainId, "chain id"), key, u64(slot, "slot")).toString()
     }
 
     companion object {
@@ -964,6 +1078,11 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         private const val IDLE_MILLIS = 120_000L
         private const val MAX_SESSIONS = 64
         private const val TOO_MANY_SESSIONS = "too many signing sessions are open, close one first"
+        private const val CLOSED = "the vault module was shut down, so it serves no further vault call"
+        private const val RESET_TITLE = "Reset nonce state"
+        private const val RESET_CANCELLED = "authentication cancelled, the nonce state was not reset"
+        private const val RESET_UNSUPPORTED = "resetting the nonce state needs Android 9 or later with a device lock or biometric"
+        private val NONCE_LOCK = Any()
         private val HEX = "0123456789abcdef".toCharArray()
     }
 }

@@ -31,6 +31,12 @@ class Qcore: NSObject {
 
     private static let tooManySessions = "too many signing sessions are open, close one first"
 
+    private static let closedMessage = "the vault module was shut down, so it serves no further vault call"
+
+    private static let nonceLock = NSLock()
+
+    private var closed = false
+
     private let idleQueue = DispatchQueue(label: "com.quantova.qcore.idle")
 
     private var idleTimer: DispatchSourceTimer?
@@ -295,7 +301,15 @@ class Qcore: NSObject {
 
     private enum NonceKeychain {
         static let service = "com.quantova.qcore.nonces.1"
+        static let manifestAccount = "manifest"
         static let maxAccounts = 4096
+        static let stateMax = 1 << 20
+
+        struct Stored {
+            var manifestPresent = false
+            var manifest: String?
+            var records: [String: String?] = [:]
+        }
 
         static func query(_ account: String) -> [String: Any] {
             return [
@@ -305,31 +319,56 @@ class Qcore: NSObject {
             ]
         }
 
-        static func loadAll() throws -> [String] {
+        static func loadAll() throws -> Stored {
             let search: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service,
+                kSecReturnAttributes as String: true,
                 kSecReturnData as String: true,
                 kSecMatchLimit as String: kSecMatchLimitAll,
             ]
             var found: CFTypeRef?
             let status = SecItemCopyMatching(search as CFDictionary, &found)
+            var stored = Stored()
             if status == errSecItemNotFound {
-                return []
+                return stored
             }
-            guard status == errSecSuccess, let items = found as? [Data], items.count <= maxAccounts else {
-                throw BridgeError(message: "the saved nonce state could not be opened, so no signing session is opened")
+            guard status == errSecSuccess, let items = found as? [[String: Any]] else {
+                throw BridgeError(message: "the saved nonce state could not be read from the keychain with status \(status)")
             }
-            return try items.map { item in
-                guard let text = String(data: item, encoding: .utf8) else {
-                    throw BridgeError(message: "the saved nonce state could not be opened, so no signing session is opened")
+            for item in items {
+                guard let account = item[kSecAttrAccount as String] as? String else { continue }
+                var text: String?
+                if let data = item[kSecValueData as String] as? Data, data.count <= stateMax {
+                    text = String(data: data, encoding: .utf8)
                 }
-                return text
+                if account == manifestAccount {
+                    stored.manifestPresent = true
+                    stored.manifest = text
+                } else if stored.records.count <= maxAccounts {
+                    stored.records[account] = .some(text)
+                }
             }
+            return stored
+        }
+
+        static func load(_ account: String) -> String? {
+            var search = query(account)
+            search[kSecReturnData as String] = true
+            search[kSecMatchLimit as String] = kSecMatchLimitOne
+            var found: CFTypeRef?
+            guard SecItemCopyMatching(search as CFDictionary, &found) == errSecSuccess,
+                  let data = found as? Data, data.count <= stateMax else {
+                return nil
+            }
+            return String(data: data, encoding: .utf8)
         }
 
         static func save(_ account: String, _ state: String) throws {
             let data = Data(state.utf8)
+            guard data.count <= stateMax else {
+                throw BridgeError(message: "the saved nonce state of an account may take at most 1 MiB, so nothing was signed")
+            }
             let update: [String: Any] = [
                 kSecValueData as String: data,
                 kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
@@ -345,25 +384,109 @@ class Qcore: NSObject {
                 throw BridgeError(message: "the nonce state could not be written, so nothing was signed")
             }
         }
-    }
 
-    private func persist(_ session: SigningSession) throws {
-        try locked {
-            for account in try session.savedAccounts() {
-                try NonceKeychain.save(account.key, account.state)
+        static func remove(_ account: String) throws {
+            let status = SecItemDelete(query(account) as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw BridgeError(message: "the saved nonce state could not be removed with status \(status)")
+            }
+        }
+
+        static func removeAll() throws {
+            let all: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+            ]
+            let status = SecItemDelete(all as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw BridgeError(message: "the saved nonce state could not be removed with status \(status)")
             }
         }
     }
 
-    private func recorded<T>(_ session: SigningSession, _ change: () throws -> T) throws -> T {
-        let out = try change()
-        try persist(session)
-        return out
+    private func persist() throws {
+        for account in nonceChanges() {
+            let save = try nonceSave(account: account, stored: NonceKeychain.load(account))
+            try NonceKeychain.save(account, save.state)
+            try NonceKeychain.save(NonceKeychain.manifestAccount, save.manifest)
+            nonceWritten(account: account, generation: save.generation)
+        }
+    }
+
+    private func restoreNonces() throws {
+        if nonceLedgerRestored() {
+            return
+        }
+        let stored = try NonceKeychain.loadAll()
+        var damaged = stored.manifestPresent && stored.manifest == nil
+        var accounts: [String] = []
+        if let manifest = stored.manifest {
+            do {
+                accounts = try nonceManifestAccounts(manifest: manifest)
+            } catch {
+                damaged = true
+            }
+        }
+        let listed = accounts.map { NonceRecord(account: $0, state: stored.records[$0] ?? nil) }
+        let unlisted = stored.records.filter { !accounts.contains($0.key) }.sorted { $0.key < $1.key }.map { $0.value }
+        _ = restoreNonceLedger(manifest: stored.manifest, manifestDamaged: damaged, listed: listed, unlisted: unlisted)
+    }
+
+    private func ensureOpen() throws {
+        if locked({ closed }) {
+            throw BridgeError(message: Self.closedMessage)
+        }
+    }
+
+    private func withNonceLock<T>(_ body: () throws -> T) rethrows -> T {
+        Self.nonceLock.lock()
+        defer { Self.nonceLock.unlock() }
+        return try body()
+    }
+
+    private func recorded<T>(_ change: () throws -> T) throws -> T {
+        return try withNonceLock {
+            try ensureOpen()
+            try restoreNonces()
+            let out = try change()
+            try persist()
+            return out
+        }
+    }
+
+    private func resetTarget(_ chainId: String, _ key: String) throws -> (UInt64, String)? {
+        if chainId.isEmpty && key.isEmpty {
+            return nil
+        }
+        guard !chainId.isEmpty, !key.isEmpty else {
+            throw BridgeError(message: "name both the chain id and the key to reset one account, or neither to reset every account")
+        }
+        return (try u64(chainId, "chain id"), key)
+    }
+
+    private func resetNow(_ chainId: String, _ key: String) throws {
+        let target = try resetTarget(chainId, key)
+        try withNonceLock {
+            try ensureOpen()
+            try restoreNonces()
+            let reset = try resetNonceState(chainId: target?.0, key: target?.1)
+            if target == nil {
+                try NonceKeychain.removeAll()
+            } else {
+                for account in reset.removed {
+                    try NonceKeychain.remove(account)
+                }
+            }
+            try NonceKeychain.save(NonceKeychain.manifestAccount, reset.manifest)
+        }
     }
 
     private func handleFor(_ alias: String) throws -> SeedHandle {
         let alias = try checkedAlias(alias)
-        let found: SeedHandle? = locked {
+        let found: SeedHandle? = try locked {
+            if closed {
+                throw BridgeError(message: Self.closedMessage)
+            }
             expireIdle()
             guard let found = held[alias] else { return nil }
             touch(alias)
@@ -375,7 +498,11 @@ class Qcore: NSObject {
         var seed = try Keychain.load(alias)
         defer { wipe(&seed) }
         let handle = try SeedHandle.fromSeedBytes(seed: seed)
-        return locked {
+        return try locked {
+            if closed {
+                handle.forget()
+                throw BridgeError(message: Self.closedMessage)
+            }
             if let raced = held[alias] {
                 handle.forget()
                 touch(alias)
@@ -389,6 +516,9 @@ class Qcore: NSObject {
 
     private func keep(_ alias: String, _ make: () throws -> SeedHandle) throws {
         try locked {
+            if closed {
+                throw BridgeError(message: Self.closedMessage)
+            }
             let alias = try checkedAlias(alias)
             if try Keychain.has(alias) {
                 throw BridgeError(message: "a seed is already stored under this alias, forget it first")
@@ -409,6 +539,7 @@ class Qcore: NSObject {
     }
 
     private func session(_ id: String) throws -> SigningSession {
+        try ensureOpen()
         guard let found = locked({ sessions[id] }) else {
             throw BridgeError(message: "no signing session is open under this id")
         }
@@ -418,6 +549,7 @@ class Qcore: NSObject {
     @objc func invalidate() {
         NotificationCenter.default.removeObserver(self)
         locked {
+            closed = true
             forgetHeld()
             sessions.removeAll()
         }
@@ -733,8 +865,45 @@ class Qcore: NSObject {
         }
     }
 
+    @objc(vaultResetNonceState:chainId:key:title:subtitle:resolver:rejecter:)
+    func rnVaultResetNonceState(
+        _ alias: String,
+        chainId: String,
+        key: String,
+        title: String,
+        subtitle: String,
+        resolver resolve: @escaping (Any?) -> Void,
+        rejecter reject: @escaping (String?, String?, Error?) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            resolve(self.resetWithAuthentication(alias, chainId: chainId, key: key, title: title, subtitle: subtitle))
+        }
+    }
+
+    private func authenticateAgain(_ alias: String, reason: String) throws {
+        let context = LAContext()
+        context.touchIDAuthenticationAllowableReuseDuration = 0
+        context.localizedReason = reason
+        defer { context.invalidate() }
+        var seed = try Keychain.load(alias, context: context)
+        wipe(&seed)
+    }
+
+    private func resetWithAuthentication(_ alias: String, chainId: String, key: String, title: String, subtitle: String) -> NSString {
+        do {
+            try ensureOpen()
+            let alias = try checkedAlias(alias)
+            _ = try resetTarget(chainId, key)
+            let reason = [title, subtitle].filter { !$0.isEmpty }.joined(separator: ". ")
+            try authenticateAgain(alias, reason: reason.isEmpty ? "Reset nonce state" : reason)
+            try resetNow(chainId, key)
+            return ""
+        } catch { return failure(error) }
+    }
+
     private func revealNow(_ alias: String, title: String, subtitle: String) -> NSString {
         do {
+            try ensureOpen()
             let alias = try checkedAlias(alias)
             let context = LAContext()
             context.touchIDAuthenticationAllowableReuseDuration = 0
@@ -754,6 +923,7 @@ class Qcore: NSObject {
     @objc(vaultHas:)
     func rnVaultHas(_ alias: String) -> NSString {
         do {
+            try ensureOpen()
             return try locked {
                 let alias = try checkedAlias(alias)
                 let present = try held[alias] != nil || Keychain.has(alias)
@@ -765,6 +935,7 @@ class Qcore: NSObject {
     @objc(vaultClose:)
     func rnVaultClose(_ alias: String) -> NSString {
         do {
+            try ensureOpen()
             try locked {
                 let alias = try checkedAlias(alias)
                 drop(alias)
@@ -775,13 +946,17 @@ class Qcore: NSObject {
 
     @objc(vaultCloseAll)
     func rnVaultCloseAll() -> NSString {
-        locked { forgetHeld() }
-        return ""
+        do {
+            try ensureOpen()
+            locked { forgetHeld() }
+            return ""
+        } catch { return failure(error) }
     }
 
     @objc(vaultForget:)
     func rnVaultForget(_ alias: String) -> NSString {
         do {
+            try ensureOpen()
             try locked {
                 let alias = try checkedAlias(alias)
                 drop(alias)
@@ -813,7 +988,7 @@ class Qcore: NSObject {
     ) -> NSString {
         do {
             let session = try session(sessionId)
-            return try recorded(session) {
+            return try recorded {
                 try handleFor(alias).signTransfer(
                     session: session,
                     index: try u64(index, "index"),
@@ -846,7 +1021,7 @@ class Qcore: NSObject {
     ) -> NSString {
         do {
             let session = try session(sessionId)
-            return try recorded(session) {
+            return try recorded {
                 try handleFor(alias).signCall(
                     session: session,
                     index: try u64(index, "index"),
@@ -877,7 +1052,7 @@ class Qcore: NSObject {
     ) -> NSString {
         do {
             let session = try session(sessionId)
-            return try recorded(session) {
+            return try recorded {
                 try handleFor(alias).signRegister(
                     session: session,
                     index: try u64(index, "index"),
@@ -909,7 +1084,7 @@ class Qcore: NSObject {
     ) -> NSString {
         do {
             let session = try session(sessionId)
-            return try recorded(session) {
+            return try recorded {
                 try handleFor(alias).signPayableCall(
                     session: session,
                     index: try u64(index, "index"),
@@ -947,7 +1122,7 @@ class Qcore: NSObject {
     ) -> NSString {
         do {
             let session = try session(sessionId)
-            return try recorded(session) {
+            return try recorded {
                 try handleFor(alias).signAssetCall(
                     session: session,
                     index: try u64(index, "index"),
@@ -1089,24 +1264,21 @@ class Qcore: NSObject {
     @objc(sessionOpen:)
     func rnSessionOpen(_ addressBook: String) -> NSString {
         do {
+            try ensureOpen()
             let book = addressBook.split(separator: ",").map(String.init)
             if locked({ sessions.count >= Self.maxSessions }) {
                 throw BridgeError(message: Self.tooManySessions)
             }
+            try withNonceLock { try restoreNonces() }
             let opened = book.isEmpty ? SigningSession() : try SigningSession.withAddressBook(book: book)
-            try locked {
-                for state in try NonceKeychain.loadAll() {
-                    try opened.restore(state: state)
-                }
-            }
             let id = UUID().uuidString
             let admitted: Bool = locked {
-                guard sessions.count < Self.maxSessions else { return false }
+                guard !closed, sessions.count < Self.maxSessions else { return false }
                 sessions[id] = opened
                 return true
             }
             guard admitted else {
-                throw BridgeError(message: Self.tooManySessions)
+                throw BridgeError(message: locked({ closed }) ? Self.closedMessage : Self.tooManySessions)
             }
             return id as NSString
         } catch { return failure(error) }
@@ -1141,12 +1313,13 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
-    @objc(sessionSlot:key:reported:expected:order:)
-    func rnSessionSlot(_ id: String, key: String, reported: String, expected: String, order: Bool) -> NSString {
+    @objc(sessionSlot:chainId:key:reported:expected:order:)
+    func rnSessionSlot(_ id: String, chainId: String, key: String, reported: String, expected: String, order: Bool) -> NSString {
         do {
             let session = try session(id)
-            return String(try recorded(session) {
+            return String(try recorded {
                 try session.slot(
+                    chainId: try u64(chainId, "chain id"),
                     key: key,
                     reported: try u64(reported, "reported nonce"),
                     expected: try optionalU64(expected, "expected nonce"),
@@ -1156,53 +1329,55 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
-    @objc(sessionSigned:key:slot:)
-    func rnSessionSigned(_ id: String, key: String, slot: String) -> NSString {
+    @objc(sessionSigned:chainId:key:slot:)
+    func rnSessionSigned(_ id: String, chainId: String, key: String, slot: String) -> NSString {
         do {
             let session = try session(id)
-            try recorded(session) { session.signed(key: key, slot: try u64(slot, "slot")) }
+            try recorded { try session.signed(chainId: try u64(chainId, "chain id"), key: key, slot: try u64(slot, "slot")) }
             return ""
         } catch { return failure(error) }
     }
 
-    @objc(sessionRelease:key:slot:)
-    func rnSessionRelease(_ id: String, key: String, slot: String) -> NSString {
+    @objc(sessionRelease:chainId:key:slot:)
+    func rnSessionRelease(_ id: String, chainId: String, key: String, slot: String) -> NSString {
         do {
             let session = try session(id)
-            try recorded(session) { session.release(key: key, slot: try u64(slot, "slot")) }
+            try recorded { session.release(chainId: try u64(chainId, "chain id"), key: key, slot: try u64(slot, "slot")) }
             return ""
         } catch { return failure(error) }
     }
 
-    @objc(sessionReleasePending:key:)
-    func rnSessionReleasePending(_ id: String, key: String) -> NSString {
+    @objc(sessionReleasePending:chainId:key:)
+    func rnSessionReleasePending(_ id: String, chainId: String, key: String) -> NSString {
         do {
             let session = try session(id)
-            try recorded(session) { session.releasePending(key: key) }
+            try recorded { session.releasePending(chainId: try u64(chainId, "chain id"), key: key) }
             return ""
         } catch { return failure(error) }
     }
 
-    @objc(sessionOutcome:key:slot:accepted:)
-    func rnSessionOutcome(_ id: String, key: String, slot: String, accepted: Bool) -> NSString {
+    @objc(sessionOutcome:chainId:key:slot:accepted:)
+    func rnSessionOutcome(_ id: String, chainId: String, key: String, slot: String, accepted: Bool) -> NSString {
         do {
             let session = try session(id)
-            try recorded(session) { session.outcome(key: key, slot: try u64(slot, "slot"), accepted: accepted) }
+            try recorded {
+                try session.outcome(chainId: try u64(chainId, "chain id"), key: key, slot: try u64(slot, "slot"), accepted: accepted)
+            }
             return ""
         } catch { return failure(error) }
     }
 
-    @objc(sessionNextNonce:key:)
-    func rnSessionNextNonce(_ id: String, key: String) -> NSString {
+    @objc(sessionNextNonce:chainId:key:)
+    func rnSessionNextNonce(_ id: String, chainId: String, key: String) -> NSString {
         do {
-            return try session(id).nextNonce(key: key).map { String($0) }.map { $0 as NSString } ?? ""
+            return try session(id).nextNonce(chainId: try u64(chainId, "chain id"), key: key).map { String($0) }.map { $0 as NSString } ?? ""
         } catch { return failure(error) }
     }
 
-    @objc(sessionIsHeld:key:slot:)
-    func rnSessionIsHeld(_ id: String, key: String, slot: String) -> NSString {
+    @objc(sessionIsHeld:chainId:key:slot:)
+    func rnSessionIsHeld(_ id: String, chainId: String, key: String, slot: String) -> NSString {
         do {
-            return (try session(id).isHeld(key: key, slot: try u64(slot, "slot")) ? "true" : "false") as NSString
+            return (try session(id).isHeld(chainId: try u64(chainId, "chain id"), key: key, slot: try u64(slot, "slot")) ? "true" : "false") as NSString
         } catch { return failure(error) }
     }
 }

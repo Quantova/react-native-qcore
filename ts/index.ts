@@ -167,6 +167,7 @@ interface QcoreNative {
   vaultImportPhrase(alias: string, phraseBase64: string): string;
   vaultImportSeed(alias: string, seedBase64: string): string;
   vaultRevealPhrase(alias: string, title: string, subtitle: string): Promise<string>;
+  vaultResetNonceState(alias: string, chainId: string, key: string, title: string, subtitle: string): Promise<string>;
   vaultHas(alias: string): string;
   vaultClose(alias: string): string;
   vaultCloseAll(): string;
@@ -263,13 +264,13 @@ interface QcoreNative {
   sessionKnown(id: string): string;
   sessionRememberAddress(id: string, address: string): string;
   sessionCheckTarget(id: string, address: string): string;
-  sessionSlot(id: string, key: string, reported: string, expected: string, order: boolean): string;
-  sessionSigned(id: string, key: string, slot: string): string;
-  sessionRelease(id: string, key: string, slot: string): string;
-  sessionReleasePending(id: string, key: string): string;
-  sessionOutcome(id: string, key: string, slot: string, accepted: boolean): string;
-  sessionNextNonce(id: string, key: string): string;
-  sessionIsHeld(id: string, key: string, slot: string): string;
+  sessionSlot(id: string, chainId: string, key: string, reported: string, expected: string, order: boolean): string;
+  sessionSigned(id: string, chainId: string, key: string, slot: string): string;
+  sessionRelease(id: string, chainId: string, key: string, slot: string): string;
+  sessionReleasePending(id: string, chainId: string, key: string): string;
+  sessionOutcome(id: string, chainId: string, key: string, slot: string, accepted: boolean): string;
+  sessionNextNonce(id: string, chainId: string, key: string): string;
+  sessionIsHeld(id: string, chainId: string, key: string, slot: string): string;
 }
 
 const LINKING_ERROR =
@@ -519,11 +520,17 @@ export interface RevealPrompt {
   subtitle?: string;
 }
 
+export interface NonceAccount {
+  chainId: bigint;
+  key: string;
+}
+
 export interface SecureQCore {
   createSeed(alias: string): void;
   importPhrase(alias: string, phrase: Uint8Array): void;
   importSeed(alias: string, seed: Uint8Array): void;
   revealPhrase(alias: string, prompt?: RevealPrompt): Promise<Uint8Array>;
+  resetNonceState(alias: string, account: NonceAccount | null, prompt?: RevealPrompt): Promise<void>;
   hasSeed(alias: string): boolean;
   closeSeed(alias: string): void;
   closeAll(): void;
@@ -664,6 +671,14 @@ export const secureQCore: SecureQCore = {
     if (typeof text !== 'string') throw new Error('the native layer returned no phrase');
     if (text.startsWith(FAILURE_PREFIX)) throw nativeError(text.slice(FAILURE_PREFIX.length));
     return fromBase64(text);
+  },
+  async resetNonceState(alias: string, account: NonceAccount | null, prompt: RevealPrompt = {}): Promise<void> {
+    const chainId = account === null ? '' : u64(account.chainId);
+    const key = account === null ? '' : account.key;
+    if (account !== null && key.length === 0) throw new Error('a nonce account names a key');
+    const text = await native.vaultResetNonceState(alias, chainId, key, prompt.title ?? '', prompt.subtitle ?? '');
+    if (typeof text !== 'string') throw new Error('the native layer returned no answer');
+    if (text.startsWith(FAILURE_PREFIX)) throw nativeError(text.slice(FAILURE_PREFIX.length));
   },
   hasSeed(alias: string): boolean {
     return native.vaultHas(alias) === 'true';
@@ -1018,35 +1033,42 @@ export class SigningSession {
     native.sessionCheckTarget(this.live(), address);
   }
 
-  slot(key: string, reported: bigint, expected: bigint | null, order: boolean): bigint {
+  slot(chainId: bigint, key: string, reported: bigint, expected: bigint | null, order: boolean): bigint {
     return BigInt(
-      native.sessionSlot(this.live(), key, u64(reported), expected === null ? '' : u64(expected), order),
+      native.sessionSlot(
+        this.live(),
+        u64(chainId),
+        key,
+        u64(reported),
+        expected === null ? '' : u64(expected),
+        order,
+      ),
     );
   }
 
-  signed(key: string, slot: bigint): void {
-    native.sessionSigned(this.live(), key, u64(slot));
+  signed(chainId: bigint, key: string, slot: bigint): void {
+    native.sessionSigned(this.live(), u64(chainId), key, u64(slot));
   }
 
-  release(key: string, slot: bigint): void {
-    native.sessionRelease(this.live(), key, u64(slot));
+  release(chainId: bigint, key: string, slot: bigint): void {
+    native.sessionRelease(this.live(), u64(chainId), key, u64(slot));
   }
 
-  releasePending(key: string): void {
-    native.sessionReleasePending(this.live(), key);
+  releasePending(chainId: bigint, key: string): void {
+    native.sessionReleasePending(this.live(), u64(chainId), key);
   }
 
-  outcome(key: string, slot: bigint, accepted: boolean): void {
-    native.sessionOutcome(this.live(), key, u64(slot), accepted);
+  outcome(chainId: bigint, key: string, slot: bigint, accepted: boolean): void {
+    native.sessionOutcome(this.live(), u64(chainId), key, u64(slot), accepted);
   }
 
-  nextNonce(key: string): bigint | null {
-    const next = native.sessionNextNonce(this.live(), key);
+  nextNonce(chainId: bigint, key: string): bigint | null {
+    const next = native.sessionNextNonce(this.live(), u64(chainId), key);
     return next === '' ? null : BigInt(next);
   }
 
-  isHeld(key: string, slot: bigint): boolean {
-    return native.sessionIsHeld(this.live(), key, u64(slot)) === 'true';
+  isHeld(chainId: bigint, key: string, slot: bigint): boolean {
+    return native.sessionIsHeld(this.live(), u64(chainId), key, u64(slot)) === 'true';
   }
 
   close(): void {

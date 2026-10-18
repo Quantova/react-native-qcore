@@ -796,19 +796,24 @@ impl SeedHandle {
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
-            session.signing(&qcore::account_address(seed, index), nonce, || {
-                transfer_with(
-                    seed,
-                    index,
-                    &to,
-                    &amount,
-                    nonce,
-                    &fee,
-                    chain_id,
-                    valid_until,
-                    head,
-                )
-            })
+            session.signing(
+                chain_id,
+                &qcore::account_address(seed, index),
+                nonce,
+                || {
+                    transfer_with(
+                        seed,
+                        index,
+                        &to,
+                        &amount,
+                        nonce,
+                        &fee,
+                        chain_id,
+                        valid_until,
+                        head,
+                    )
+                },
+            )
         })
     }
 
@@ -829,21 +834,26 @@ impl SeedHandle {
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
-            session.signing(&qcore::account_address(seed, index), nonce, || {
-                call_with(
-                    seed,
-                    index,
-                    &target,
-                    &args_hex,
-                    nonce,
-                    meter_limit,
-                    &fee,
-                    chain_id,
-                    valid_until,
-                    &transfer_fee,
-                    head,
-                )
-            })
+            session.signing(
+                chain_id,
+                &qcore::account_address(seed, index),
+                nonce,
+                || {
+                    call_with(
+                        seed,
+                        index,
+                        &target,
+                        &args_hex,
+                        nonce,
+                        meter_limit,
+                        &fee,
+                        chain_id,
+                        valid_until,
+                        &transfer_fee,
+                        head,
+                    )
+                },
+            )
         })
     }
 
@@ -860,9 +870,12 @@ impl SeedHandle {
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
-            session.signing(&qcore::account_address(seed, index), nonce, || {
-                register_with(seed, index, nonce, &fee, chain_id, valid_until, head)
-            })
+            session.signing(
+                chain_id,
+                &qcore::account_address(seed, index),
+                nonce,
+                || register_with(seed, index, nonce, &fee, chain_id, valid_until, head),
+            )
         })
     }
 
@@ -884,22 +897,27 @@ impl SeedHandle {
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
-            session.signing(&qcore::account_address(seed, index), nonce, || {
-                payable_call_with(
-                    seed,
-                    index,
-                    &target,
-                    &args_hex,
-                    nonce,
-                    meter_limit,
-                    &fee,
-                    &value,
-                    chain_id,
-                    valid_until,
-                    &transfer_fee,
-                    head,
-                )
-            })
+            session.signing(
+                chain_id,
+                &qcore::account_address(seed, index),
+                nonce,
+                || {
+                    payable_call_with(
+                        seed,
+                        index,
+                        &target,
+                        &args_hex,
+                        nonce,
+                        meter_limit,
+                        &fee,
+                        &value,
+                        chain_id,
+                        valid_until,
+                        &transfer_fee,
+                        head,
+                    )
+                },
+            )
         })
     }
 
@@ -922,173 +940,810 @@ impl SeedHandle {
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
-            session.signing(&qcore::account_address(seed, index), nonce, || {
-                asset_call_with(
-                    seed,
-                    index,
-                    &target,
-                    &args_hex,
-                    &asset_issuer,
-                    &amount,
-                    nonce,
-                    meter_limit,
-                    &fee,
-                    chain_id,
-                    valid_until,
-                    &transfer_fee,
-                    head,
-                )
-            })
+            session.signing(
+                chain_id,
+                &qcore::account_address(seed, index),
+                nonce,
+                || {
+                    asset_call_with(
+                        seed,
+                        index,
+                        &target,
+                        &args_hex,
+                        &asset_issuer,
+                        &amount,
+                        nonce,
+                        meter_limit,
+                        &fee,
+                        chain_id,
+                        valid_until,
+                        &transfer_fee,
+                        head,
+                    )
+                },
+            )
         })
     }
 }
 
 const SAVED_STATE_MAX: usize = 1 << 20;
 
-#[derive(uniffi::Record)]
-pub struct SavedNonces {
-    pub key: String,
-    pub state: String,
+const NONCE_ACCOUNTS_MAX: usize = 4096;
+
+const NONCE_KEY_MAX: usize = 128;
+
+const NONCE_SLOTS_MAX: usize = 16_384;
+
+const NONCE_STATE_VERSION: u64 = 2;
+
+const TOO_MANY_ACCOUNTS: &str = "the nonce state already keeps 4096 accounts, the most it may keep, so no new account is tracked until the nonce state of one is reset";
+
+const TOO_MANY_SLOTS: &str = "this account already keeps 16384 nonces that are signed or reserved and not yet accepted, the most its saved state may keep, record the outcome of earlier nonces or reset its nonce state";
+
+const KEY_OUT_OF_RANGE: &str = "a nonce key is one to 128 bytes";
+
+const STATE_TOO_LARGE: &str =
+    "the saved nonce state of an account may take at most 1 MiB, so nothing was signed";
+
+const MANIFEST_DAMAGED: &str = "the saved nonce manifest could not be opened, so no account signs until the nonce state is reset after authenticating";
+
+const STATE_WITHOUT_MANIFEST: &str = "saved nonce state was found without its manifest or in the earlier format that named no chain, so it is refused and no account signs until the nonce state is reset after authenticating";
+
+const TOO_MANY_SAVED: &str = "the saved nonce state holds more than 4096 accounts, so no account signs until the nonce state is reset after authenticating";
+
+const EARLIER_FORMAT: &str =
+    "the saved nonce state is in the earlier format that named no chain, so it is refused";
+
+const WHOLE_STATE_BLOCKED: &str =
+    "the whole saved nonce state is blocked, reset the nonce state of every account";
+
+fn account_name(chain_id: u64, key: &str) -> String {
+    format!("{chain_id}:{key}")
 }
 
-#[derive(Default)]
-struct Ledger {
-    core: qcore::SigningSession,
-    reserved: BTreeMap<String, BTreeSet<u64>>,
-    dirty: BTreeSet<String>,
+fn check_nonce_key(key: &str) -> Result<(), String> {
+    if key.is_empty() || key.len() > NONCE_KEY_MAX {
+        return Err(KEY_OUT_OF_RANGE.to_string());
+    }
+    Ok(())
 }
 
-fn held_slot(entry: &Json) -> Option<u64> {
-    entry
-        .get("slot")
+fn split_account(account: &str) -> Option<(u64, &str)> {
+    let (chain, key) = account.split_once(':')?;
+    let chain_id = decimal_text(chain)?;
+    check_nonce_key(key).ok()?;
+    Some((chain_id, key))
+}
+
+fn decimal_text(text: &str) -> Option<u64> {
+    qcore::canonical_decimal(text).and_then(|n| u64::try_from(n).ok())
+}
+
+fn decimal(value: Option<&Json>) -> Option<u64> {
+    value.and_then(Json::as_str).and_then(decimal_text)
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+struct Nonces {
+    next: Option<u64>,
+    held: BTreeMap<u64, bool>,
+    reserved: BTreeSet<u64>,
+}
+
+impl Nonces {
+    fn slot(&mut self, reported: u64, expected: Option<u64>, order: bool) -> Result<u64, String> {
+        if let Some(exp) = expected {
+            if exp != reported {
+                return Err(format!(
+                    "the gateway reported nonce {reported} but you expected {exp}, the chain admits only the nonce the account has reached, refusing to sign"
+                ));
+            }
+        }
+        self.held
+            .retain(|slot, accepted| !(*accepted && *slot < reported));
+        if expected.is_some() {
+            self.held.retain(|slot, _| *slot > reported);
+        } else {
+            if order {
+                match self.next {
+                    Some(local) if reported > local => {
+                        return Err(format!(
+                            "the gateway reports order nonce {reported} above the {local} this client tracked, refusing to sign an order that stays valid until the contract reaches that nonce, pass the expected order nonce to sign at it"
+                        ));
+                    }
+                    None if reported > 0 => {
+                        return Err(format!(
+                            "this signing session has not tracked the order nonce yet and the gateway reports {reported}, pass the expected order nonce or restore a saved session before signing"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            if self.held.contains_key(&reported) {
+                return Err(format!(
+                    "a transaction was already signed for nonce {reported} in this session and was not superseded, one nonce carries one signature, so if it never landed pass that nonce explicitly to sign at it again"
+                ));
+            }
+            if let Some((&stale, _)) = self
+                .held
+                .iter()
+                .find(|(slot, accepted)| **slot < reported && !**accepted)
+            {
+                return Err(format!(
+                    "a transaction signed at nonce {stale} in this session was not accepted, yet the gateway now reports nonce {reported} past it, check whether it landed, then pass nonce {reported} explicitly to sign at it"
+                ));
+            }
+        }
+        if !self.reserved.insert(reported) && expected.is_none() {
+            return Err(format!(
+                "nonce {reported} is already reserved by a signing in progress in this session, finish or release it before reserving it again"
+            ));
+        }
+        self.next = Some(self.next.map_or(reported, |local| local.max(reported)));
+        Ok(reported)
+    }
+
+    fn signed(&mut self, slot: u64) {
+        self.reserved.remove(&slot);
+        self.held.insert(slot, false);
+    }
+
+    fn accepted(&mut self, slot: u64) {
+        self.held.insert(slot, true);
+        let after = slot.saturating_add(1);
+        self.next = Some(self.next.map_or(after, |local| local.max(after)));
+        self.prune();
+    }
+
+    fn prune(&mut self) {
+        if let Some(next) = self.next {
+            let floor = next.saturating_sub(1);
+            self.held
+                .retain(|slot, accepted| !(*accepted && *slot < floor));
+        }
+    }
+
+    fn slots(&self) -> usize {
+        self.held.len()
+            + self
+                .reserved
+                .iter()
+                .filter(|slot| !self.held.contains_key(slot))
+                .count()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.next.is_none() && self.held.is_empty() && self.reserved.is_empty()
+    }
+
+    fn merge(&mut self, other: &Nonces) {
+        if let Some(next) = other.next {
+            self.next = Some(self.next.map_or(next, |local| local.max(next)));
+        }
+        for (slot, accepted) in &other.held {
+            let entry = self.held.entry(*slot).or_insert(*accepted);
+            *entry = *entry && *accepted;
+        }
+        self.prune();
+    }
+}
+
+#[derive(Debug, Default)]
+struct Account {
+    chain_id: u64,
+    key: String,
+    nonces: Nonces,
+    generation: u64,
+    written: Option<u64>,
+    blocked: Option<String>,
+}
+
+#[derive(Debug)]
+struct SavedAccount {
+    chain_id: u64,
+    key: String,
+    generation: u64,
+    nonces: Nonces,
+}
+
+fn parse_saved(text: &str) -> Result<SavedAccount, String> {
+    if text.len() > SAVED_STATE_MAX {
+        return Err("the saved nonce state is too large".to_string());
+    }
+    let doc = qcore::json::parse(text)?;
+    match doc.get("version").and_then(Json::as_u64) {
+        Some(NONCE_STATE_VERSION) => {}
+        Some(1) => return Err(EARLIER_FORMAT.to_string()),
+        _ => return Err("the saved nonce state names no version this client reads".to_string()),
+    }
+    let chain_id = decimal(doc.get("chain_id"))
+        .ok_or_else(|| "the saved nonce state names no chain".to_string())?;
+    let key = doc
+        .get("key")
         .and_then(Json::as_str)
-        .filter(|text| digits(text))
-        .and_then(|text| text.parse::<u64>().ok())
+        .ok_or_else(|| "the saved nonce state names no key".to_string())?;
+    check_nonce_key(key)?;
+    let generation = decimal(doc.get("generation"))
+        .ok_or_else(|| "the saved nonce state names no generation".to_string())?;
+    let next = match doc.get("next") {
+        None => None,
+        Some(value) => Some(
+            decimal(Some(value))
+                .ok_or_else(|| "the saved next nonce is not a whole number".to_string())?,
+        ),
+    };
+    let list = doc
+        .get("held")
+        .and_then(Json::as_array)
+        .ok_or_else(|| "the saved nonce state has no held list".to_string())?;
+    if list.len() > NONCE_SLOTS_MAX {
+        return Err(TOO_MANY_SLOTS.to_string());
+    }
+    let mut held = BTreeMap::new();
+    for entry in list {
+        let slot = decimal(entry.get("slot"))
+            .ok_or_else(|| "a saved held nonce is not a whole number".to_string())?;
+        let accepted = entry
+            .get("accepted")
+            .and_then(Json::as_bool)
+            .ok_or_else(|| "a saved held nonce has no accepted flag".to_string())?;
+        held.insert(slot, accepted);
+    }
+    Ok(SavedAccount {
+        chain_id,
+        key: key.to_string(),
+        generation,
+        nonces: Nonces {
+            next,
+            held,
+            reserved: BTreeSet::new(),
+        },
+    })
 }
 
-impl Ledger {
+fn render_saved(account: &Account) -> String {
+    let mut held = account.nonces.held.clone();
+    for slot in &account.nonces.reserved {
+        held.entry(*slot).or_insert(false);
+    }
+    let held: Vec<Json> = held
+        .iter()
+        .map(|(slot, accepted)| {
+            object(vec![
+                ("slot", Json::str(slot.to_string())),
+                ("accepted", Json::Bool(*accepted)),
+            ])
+        })
+        .collect();
+    let mut fields = vec![
+        ("version", Json::Int(NONCE_STATE_VERSION)),
+        ("chain_id", Json::str(account.chain_id.to_string())),
+        ("key", Json::str(account.key.clone())),
+        ("generation", Json::str(account.generation.to_string())),
+        ("held", Json::Array(held)),
+    ];
+    if let Some(next) = account.nonces.next {
+        fields.push(("next", Json::str(next.to_string())));
+    }
+    object(fields).render()
+}
+
+fn parse_manifest(text: &str) -> Result<Vec<(String, u64)>, String> {
+    if text.len() > SAVED_STATE_MAX {
+        return Err(MANIFEST_DAMAGED.to_string());
+    }
+    let doc = qcore::json::parse(text).map_err(|_| MANIFEST_DAMAGED.to_string())?;
+    if doc.get("version").and_then(Json::as_u64) != Some(NONCE_STATE_VERSION) {
+        return Err(MANIFEST_DAMAGED.to_string());
+    }
+    let list = doc
+        .get("accounts")
+        .and_then(Json::as_array)
+        .ok_or_else(|| MANIFEST_DAMAGED.to_string())?;
+    if list.len() > NONCE_ACCOUNTS_MAX {
+        return Err(TOO_MANY_SAVED.to_string());
+    }
+    let mut out: Vec<(String, u64)> = Vec::with_capacity(list.len());
+    for entry in list {
+        let account = entry
+            .get("account")
+            .and_then(Json::as_str)
+            .filter(|account| split_account(account).is_some())
+            .ok_or_else(|| MANIFEST_DAMAGED.to_string())?;
+        let generation =
+            decimal(entry.get("generation")).ok_or_else(|| MANIFEST_DAMAGED.to_string())?;
+        if out.iter().any(|(seen, _)| seen == account) {
+            return Err(MANIFEST_DAMAGED.to_string());
+        }
+        out.push((account.to_string(), generation));
+    }
+    Ok(out)
+}
+
+#[derive(uniffi::Record)]
+pub struct NonceRecord {
+    pub account: String,
+    pub state: Option<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct NonceSave {
+    pub account: String,
+    pub generation: u64,
+    pub state: String,
+    pub manifest: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct NonceReset {
+    pub removed: Vec<String>,
+    pub manifest: String,
+}
+
+#[derive(Debug, Default)]
+struct NonceLedger {
+    accounts: BTreeMap<String, Account>,
+    dirty: BTreeSet<String>,
+    restored: bool,
+    blocked_all: Option<String>,
+}
+
+static NONCE_LEDGER: Mutex<NonceLedger> = Mutex::new(NonceLedger {
+    accounts: BTreeMap::new(),
+    dirty: BTreeSet::new(),
+    restored: false,
+    blocked_all: None,
+});
+
+impl NonceLedger {
+    fn usable(&self, name: &str) -> Result<Option<&Account>, String> {
+        if let Some(reason) = &self.blocked_all {
+            return Err(reason.clone());
+        }
+        match self.accounts.get(name) {
+            Some(account) => match &account.blocked {
+                Some(reason) => Err(reason.clone()),
+                None => Ok(Some(account)),
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn change<T>(
+        &mut self,
+        chain_id: u64,
+        key: &str,
+        apply: impl FnOnce(&mut Nonces) -> Result<T, String>,
+    ) -> Result<T, String> {
+        check_nonce_key(key)?;
+        let name = account_name(chain_id, key);
+        let created = self.usable(&name)?.is_none();
+        if created {
+            if self.accounts.len() >= NONCE_ACCOUNTS_MAX {
+                return Err(TOO_MANY_ACCOUNTS.to_string());
+            }
+            self.accounts.insert(
+                name.clone(),
+                Account {
+                    chain_id,
+                    key: key.to_string(),
+                    ..Account::default()
+                },
+            );
+        }
+        let Some(account) = self.accounts.get_mut(&name) else {
+            return Err(TOO_MANY_ACCOUNTS.to_string());
+        };
+        let before = (account.nonces.slots() >= NONCE_SLOTS_MAX).then(|| account.nonces.clone());
+        match apply(&mut account.nonces) {
+            Ok(out) => {
+                if account.nonces.slots() > NONCE_SLOTS_MAX {
+                    if let Some(before) = before {
+                        account.nonces = before;
+                    }
+                    if created && account.nonces.is_empty() {
+                        self.accounts.remove(&name);
+                    }
+                    return Err(TOO_MANY_SLOTS.to_string());
+                }
+                self.dirty.insert(name);
+                Ok(out)
+            }
+            Err(refused) => {
+                if created && account.nonces.is_empty() {
+                    self.accounts.remove(&name);
+                }
+                Err(refused)
+            }
+        }
+    }
+
     fn slot(
         &mut self,
+        chain_id: u64,
         key: &str,
         reported: u64,
         expected: Option<u64>,
         order: bool,
     ) -> Result<u64, String> {
-        self.dirty.insert(key.to_string());
-        let out = self.core.slot(key, reported, expected, order);
-        if out.is_ok() {
-            self.reserved
-                .entry(key.to_string())
-                .or_default()
-                .insert(reported);
+        self.change(chain_id, key, |nonces| {
+            nonces.slot(reported, expected, order)
+        })
+    }
+
+    fn signed(&mut self, chain_id: u64, key: &str, slot: u64) -> Result<(), String> {
+        self.change(chain_id, key, |nonces| {
+            nonces.signed(slot);
+            Ok(())
+        })
+    }
+
+    fn outcome(
+        &mut self,
+        chain_id: u64,
+        key: &str,
+        slot: u64,
+        accepted: bool,
+    ) -> Result<(), String> {
+        if !accepted {
+            return Ok(());
         }
-        out
+        self.change(chain_id, key, |nonces| {
+            nonces.accepted(slot);
+            Ok(())
+        })
     }
 
-    fn signed(&mut self, key: &str, slot: u64) {
-        self.dirty.insert(key.to_string());
-        self.core.signed(key, slot);
-        if let Some(reserved) = self.reserved.get_mut(key) {
-            reserved.remove(&slot);
+    fn live_mut(&mut self, chain_id: u64, key: &str) -> Option<(String, &mut Account)> {
+        if self.blocked_all.is_some() {
+            return None;
+        }
+        let name = account_name(chain_id, key);
+        let account = self.accounts.get_mut(&name)?;
+        if account.blocked.is_some() {
+            return None;
+        }
+        Some((name, account))
+    }
+
+    fn release(&mut self, chain_id: u64, key: &str, slot: u64) {
+        if let Some((name, account)) = self.live_mut(chain_id, key) {
+            if account.nonces.reserved.remove(&slot) {
+                self.dirty.insert(name);
+            }
         }
     }
 
-    fn release(&mut self, key: &str, slot: u64) {
-        self.dirty.insert(key.to_string());
-        self.core.release(key, slot);
-        if let Some(reserved) = self.reserved.get_mut(key) {
-            reserved.remove(&slot);
+    fn release_pending(&mut self, chain_id: u64, key: &str) {
+        if let Some((name, account)) = self.live_mut(chain_id, key) {
+            if !account.nonces.reserved.is_empty() {
+                account.nonces.reserved.clear();
+                self.dirty.insert(name);
+            }
         }
     }
 
-    fn release_pending(&mut self, key: &str) {
-        self.dirty.insert(key.to_string());
-        self.core.release_pending(key);
-        self.reserved.remove(key);
+    fn next_nonce(&self, chain_id: u64, key: &str) -> Option<u64> {
+        match self.usable(&account_name(chain_id, key)) {
+            Ok(Some(account)) => account.nonces.next,
+            _ => None,
+        }
     }
 
-    fn outcome(&mut self, key: &str, slot: u64, accepted: bool) {
-        self.dirty.insert(key.to_string());
-        self.core.outcome(key, slot, accepted);
+    fn is_held(&self, chain_id: u64, key: &str, slot: u64) -> bool {
+        match self.usable(&account_name(chain_id, key)) {
+            Ok(Some(account)) => account.nonces.held.contains_key(&slot),
+            Ok(None) => false,
+            Err(_) => true,
+        }
     }
 
-    fn saved(&self) -> Result<Vec<SavedNonces>, QcoreError> {
-        let exported = qcore::json::parse(&self.core.export_state()).map_err(err)?;
-        let entries = exported
-            .get("keys")
-            .and_then(Json::as_array)
-            .ok_or_else(|| err("the client core exported a session without keys"))?;
-        let mut out = Vec::with_capacity(self.dirty.len());
-        for key in &self.dirty {
-            let found = entries
-                .iter()
-                .find(|entry| entry.get("key").and_then(Json::as_str) == Some(key.as_str()));
-            let mut held: Vec<Json> = found
-                .and_then(|entry| entry.get("held"))
-                .and_then(Json::as_array)
-                .map(<[Json]>::to_vec)
-                .unwrap_or_default();
-            let signed: BTreeSet<u64> = held.iter().filter_map(held_slot).collect();
-            for slot in self.reserved.get(key).into_iter().flatten() {
-                if !signed.contains(slot) {
-                    held.push(object(vec![
-                        ("slot", Json::str(slot.to_string())),
-                        ("accepted", Json::Bool(false)),
-                    ]));
+    fn signing(
+        &mut self,
+        chain_id: u64,
+        key: &str,
+        nonce: u64,
+        sign: impl FnOnce() -> Result<String, QcoreError>,
+    ) -> Result<String, QcoreError> {
+        let name = account_name(chain_id, key);
+        let reserved = self
+            .usable(&name)
+            .map_err(err)?
+            .is_some_and(|account| account.nonces.reserved.contains(&nonce));
+        if !reserved {
+            return Err(err(format!(
+                "the vault signs only at a nonce taken from this signing session, nonce {nonce} of {key} on chain {chain_id} was not reserved with slot or was already signed"
+            )));
+        }
+        let signed = sign()?;
+        if let Some(account) = self.accounts.get_mut(&name) {
+            account.nonces.signed(nonce);
+        }
+        self.dirty.insert(name);
+        Ok(signed)
+    }
+
+    fn manifest_with(&self, account: Option<(&str, u64)>) -> String {
+        let entries: Vec<Json> = self
+            .accounts
+            .iter()
+            .filter_map(|(name, entry)| {
+                let generation = match account {
+                    Some((current, generation)) if current == name => Some(generation),
+                    _ => entry.written,
+                }?;
+                Some(object(vec![
+                    ("account", Json::str(name.clone())),
+                    ("generation", Json::str(generation.to_string())),
+                ]))
+            })
+            .collect();
+        object(vec![
+            ("version", Json::Int(NONCE_STATE_VERSION)),
+            ("accounts", Json::Array(entries)),
+        ])
+        .render()
+    }
+
+    fn changes(&self) -> Vec<String> {
+        self.dirty.iter().cloned().collect()
+    }
+
+    fn save(&mut self, name: &str, stored: Option<&str>) -> Result<NonceSave, String> {
+        let entry = self
+            .accounts
+            .get_mut(name)
+            .ok_or_else(|| format!("no nonce state is kept for {name}"))?;
+        let mut stored_generation = 0;
+        if let Some(saved) = stored.and_then(|text| parse_saved(text).ok()) {
+            if saved.chain_id == entry.chain_id && saved.key == entry.key {
+                stored_generation = saved.generation;
+                if entry.written != Some(saved.generation) {
+                    entry.nonces.merge(&saved.nonces);
                 }
             }
-            let mut fields = vec![("key", Json::str(key.clone())), ("held", Json::Array(held))];
-            if let Some(next) = found.and_then(|entry| entry.get("next")) {
-                fields.push(("next", next.clone()));
-            }
-            let state = object(vec![
-                ("version", Json::Int(1)),
-                ("keys", Json::Array(vec![object(fields)])),
-            ])
-            .render();
-            out.push(SavedNonces {
-                key: key.clone(),
-                state,
-            });
         }
-        Ok(out)
+        let generation = entry
+            .generation
+            .max(stored_generation)
+            .checked_add(1)
+            .ok_or_else(|| "the nonce state generation is exhausted".to_string())?;
+        entry.generation = generation;
+        let state = render_saved(entry);
+        if state.len() > SAVED_STATE_MAX {
+            return Err(STATE_TOO_LARGE.to_string());
+        }
+        let manifest = self.manifest_with(Some((name, generation)));
+        if manifest.len() > SAVED_STATE_MAX {
+            return Err(TOO_MANY_SAVED.to_string());
+        }
+        Ok(NonceSave {
+            account: name.to_string(),
+            generation,
+            state,
+            manifest,
+        })
     }
+
+    fn written(&mut self, name: &str, generation: u64) {
+        if let Some(entry) = self.accounts.get_mut(name) {
+            if entry.generation == generation {
+                entry.written = Some(generation);
+                self.dirty.remove(name);
+            }
+        }
+    }
+
+    fn restore(
+        &mut self,
+        manifest: Option<&str>,
+        manifest_damaged: bool,
+        listed: &[NonceRecord],
+        unlisted: &[Option<String>],
+    ) -> bool {
+        if self.restored {
+            return false;
+        }
+        self.restored = true;
+        if listed.len() + unlisted.len() > NONCE_ACCOUNTS_MAX {
+            self.blocked_all = Some(TOO_MANY_SAVED.to_string());
+            return true;
+        }
+        if manifest_damaged {
+            self.blocked_all = Some(MANIFEST_DAMAGED.to_string());
+            return true;
+        }
+        let Some(manifest) = manifest else {
+            if !listed.is_empty() || !unlisted.is_empty() {
+                self.blocked_all = Some(STATE_WITHOUT_MANIFEST.to_string());
+            }
+            return true;
+        };
+        let entries = match parse_manifest(manifest) {
+            Ok(entries) => entries,
+            Err(reason) => {
+                self.blocked_all = Some(reason);
+                return true;
+            }
+        };
+        for (name, generation) in &entries {
+            let Some((chain_id, key)) = split_account(name) else {
+                continue;
+            };
+            let text = listed
+                .iter()
+                .find(|record| &record.account == name)
+                .and_then(|record| record.state.as_deref());
+            let found = match text {
+                None => Err(format!(
+                    "the saved nonce state of {name} is missing or could not be opened, so it does not sign until its nonce state is reset after authenticating"
+                )),
+                Some(text) => match parse_saved(text) {
+                    Ok(saved) if saved.chain_id != chain_id || saved.key != key => Err(format!(
+                        "the saved nonce state of {name} belongs to another account, so it does not sign until its nonce state is reset after authenticating"
+                    )),
+                    Ok(saved) if saved.generation < *generation => Err(format!(
+                        "the saved nonce state of {name} is older than its manifest records, so it does not sign until its nonce state is reset after authenticating"
+                    )),
+                    Ok(saved) => Ok(saved),
+                    Err(reason) => Err(format!(
+                        "the saved nonce state of {name} could not be read ({reason}), so it does not sign until its nonce state is reset after authenticating"
+                    )),
+                },
+            };
+            let entry = self
+                .accounts
+                .entry(name.clone())
+                .or_insert_with(|| Account {
+                    chain_id,
+                    key: key.to_string(),
+                    ..Account::default()
+                });
+            match found {
+                Ok(saved) => {
+                    entry.nonces.merge(&saved.nonces);
+                    entry.generation = entry.generation.max(saved.generation);
+                    entry.written = Some(saved.generation);
+                }
+                Err(reason) => {
+                    entry.generation = entry.generation.max(*generation);
+                    entry.written = Some(*generation);
+                    entry.blocked = Some(reason);
+                }
+            }
+        }
+        for text in unlisted.iter().flatten() {
+            let Ok(saved) = parse_saved(text) else {
+                continue;
+            };
+            let name = account_name(saved.chain_id, &saved.key);
+            if entries.iter().any(|(listed, _)| listed == &name) {
+                continue;
+            }
+            if !self.accounts.contains_key(&name) && self.accounts.len() >= NONCE_ACCOUNTS_MAX {
+                self.blocked_all = Some(TOO_MANY_SAVED.to_string());
+                return true;
+            }
+            let entry = self.accounts.entry(name).or_insert_with(|| Account {
+                chain_id: saved.chain_id,
+                key: saved.key.clone(),
+                ..Account::default()
+            });
+            entry.nonces.merge(&saved.nonces);
+            entry.generation = entry.generation.max(saved.generation);
+            entry.written = Some(saved.generation);
+        }
+        true
+    }
+
+    fn reset(&mut self, target: Option<(u64, &str)>) -> Result<NonceReset, String> {
+        let removed = match target {
+            Some((chain_id, key)) => {
+                check_nonce_key(key)?;
+                if self.blocked_all.is_some() {
+                    return Err(WHOLE_STATE_BLOCKED.to_string());
+                }
+                let name = account_name(chain_id, key);
+                self.accounts.remove(&name);
+                self.dirty.remove(&name);
+                vec![name]
+            }
+            None => {
+                let removed = self.accounts.keys().cloned().collect();
+                self.accounts.clear();
+                self.dirty.clear();
+                self.blocked_all = None;
+                removed
+            }
+        };
+        self.restored = true;
+        Ok(NonceReset {
+            removed,
+            manifest: self.manifest_with(None),
+        })
+    }
+}
+
+#[uniffi::export]
+pub fn nonce_ledger_restored() -> bool {
+    lock(&NONCE_LEDGER).restored
+}
+
+#[uniffi::export]
+pub fn nonce_manifest_accounts(manifest: String) -> Result<Vec<String>, QcoreError> {
+    Ok(parse_manifest(&manifest)
+        .map_err(err)?
+        .into_iter()
+        .map(|(account, _)| account)
+        .collect())
+}
+
+#[uniffi::export]
+pub fn restore_nonce_ledger(
+    manifest: Option<String>,
+    manifest_damaged: bool,
+    listed: Vec<NonceRecord>,
+    unlisted: Vec<Option<String>>,
+) -> bool {
+    lock(&NONCE_LEDGER).restore(manifest.as_deref(), manifest_damaged, &listed, &unlisted)
+}
+
+#[uniffi::export]
+pub fn nonce_changes() -> Vec<String> {
+    lock(&NONCE_LEDGER).changes()
+}
+
+#[uniffi::export]
+pub fn nonce_save(account: String, stored: Option<String>) -> Result<NonceSave, QcoreError> {
+    lock(&NONCE_LEDGER)
+        .save(&account, stored.as_deref())
+        .map_err(err)
+}
+
+#[uniffi::export]
+pub fn nonce_written(account: String, generation: u64) {
+    lock(&NONCE_LEDGER).written(&account, generation)
+}
+
+#[uniffi::export]
+pub fn reset_nonce_state(
+    chain_id: Option<u64>,
+    key: Option<String>,
+) -> Result<NonceReset, QcoreError> {
+    let target = match (chain_id, key.as_deref()) {
+        (Some(chain_id), Some(key)) => Some((chain_id, key)),
+        (None, None) => None,
+        _ => {
+            return Err(err(
+                "name both the chain id and the key to reset one account, or neither to reset every account",
+            ))
+        }
+    };
+    lock(&NONCE_LEDGER).reset(target).map_err(err)
 }
 
 #[derive(uniffi::Object)]
 pub struct SigningSession {
-    inner: Mutex<Ledger>,
+    book: Mutex<qcore::SigningSession>,
+    ledger: &'static Mutex<NonceLedger>,
 }
 
 impl SigningSession {
-    fn holding(core: qcore::SigningSession) -> Arc<Self> {
+    fn holding(book: qcore::SigningSession, ledger: &'static Mutex<NonceLedger>) -> Arc<Self> {
         Arc::new(SigningSession {
-            inner: Mutex::new(Ledger {
-                core,
-                ..Ledger::default()
-            }),
+            book: Mutex::new(book),
+            ledger,
         })
     }
 
     fn signing(
         &self,
+        chain_id: u64,
         key: &str,
         nonce: u64,
         sign: impl FnOnce() -> Result<String, QcoreError>,
     ) -> Result<String, QcoreError> {
-        let mut ledger = lock(&self.inner);
-        let reserved = ledger
-            .reserved
-            .get(key)
-            .is_some_and(|reserved| reserved.contains(&nonce));
-        if !reserved {
-            return Err(err(format!(
-                "the vault signs only at a nonce taken from this signing session, nonce {nonce} of {key} was not reserved with slot or was already signed"
-            )));
-        }
-        let signed = sign()?;
-        ledger.signed(key, nonce);
-        Ok(signed)
+        lock(self.ledger).signing(chain_id, key, nonce, sign)
     }
 }
 
@@ -1096,72 +1751,70 @@ impl SigningSession {
 impl SigningSession {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
-        Self::holding(qcore::SigningSession::new())
+        Self::holding(qcore::SigningSession::new(), &NONCE_LEDGER)
     }
 
     #[uniffi::constructor]
     pub fn with_address_book(book: Vec<String>) -> Result<Arc<Self>, QcoreError> {
         let core = qcore::SigningSession::with_address_book(&book).map_err(err)?;
-        Ok(Self::holding(core))
+        Ok(Self::holding(core, &NONCE_LEDGER))
     }
 
     pub fn known(&self) -> Vec<String> {
-        lock(&self.inner).core.known()
+        lock(&self.book).known()
     }
 
     pub fn remember_address(&self, address: String) {
-        lock(&self.inner).core.remember_address(&address)
+        lock(&self.book).remember_address(&address)
     }
 
     pub fn check_target(&self, address: String) -> Result<(), QcoreError> {
-        lock(&self.inner).core.check_target(&address).map_err(err)
+        lock(&self.book).check_target(&address).map_err(err)
     }
 
     pub fn slot(
         &self,
+        chain_id: u64,
         key: String,
         reported: u64,
         expected: Option<u64>,
         order: bool,
     ) -> Result<u64, QcoreError> {
-        lock(&self.inner)
-            .slot(&key, reported, expected, order)
+        lock(self.ledger)
+            .slot(chain_id, &key, reported, expected, order)
             .map_err(err)
     }
 
-    pub fn signed(&self, key: String, slot: u64) {
-        lock(&self.inner).signed(&key, slot)
+    pub fn signed(&self, chain_id: u64, key: String, slot: u64) -> Result<(), QcoreError> {
+        lock(self.ledger).signed(chain_id, &key, slot).map_err(err)
     }
 
-    pub fn release(&self, key: String, slot: u64) {
-        lock(&self.inner).release(&key, slot)
+    pub fn release(&self, chain_id: u64, key: String, slot: u64) {
+        lock(self.ledger).release(chain_id, &key, slot)
     }
 
-    pub fn release_pending(&self, key: String) {
-        lock(&self.inner).release_pending(&key)
+    pub fn release_pending(&self, chain_id: u64, key: String) {
+        lock(self.ledger).release_pending(chain_id, &key)
     }
 
-    pub fn outcome(&self, key: String, slot: u64, accepted: bool) {
-        lock(&self.inner).outcome(&key, slot, accepted)
+    pub fn outcome(
+        &self,
+        chain_id: u64,
+        key: String,
+        slot: u64,
+        accepted: bool,
+    ) -> Result<(), QcoreError> {
+        lock(self.ledger)
+            .outcome(chain_id, &key, slot, accepted)
+            .map_err(err)
     }
 
-    pub fn next_nonce(&self, key: String) -> Option<u64> {
-        lock(&self.inner).core.next_nonce(&key)
+    pub fn next_nonce(&self, chain_id: u64, key: String) -> Option<u64> {
+        lock(self.ledger).next_nonce(chain_id, &key)
     }
 
-    pub fn is_held(&self, key: String, slot: u64) -> bool {
-        lock(&self.inner).core.is_held(&key, slot)
-    }
-
-    pub fn saved_accounts(&self) -> Result<Vec<SavedNonces>, QcoreError> {
-        lock(&self.inner).saved()
-    }
-
-    pub fn restore(&self, state: String) -> Result<(), QcoreError> {
-        if state.len() > SAVED_STATE_MAX {
-            return Err(err("the saved nonce state is too large"));
-        }
-        lock(&self.inner).core.import_state(&state).map_err(err)
+    pub fn is_held(&self, chain_id: u64, key: String, slot: u64) -> bool {
+        lock(self.ledger).is_held(chain_id, &key, slot)
     }
 }
 
@@ -1177,10 +1830,25 @@ mod tests {
         SeedHandle::from_seed_bytes(seed()).expect("a thirty two byte seed is held")
     }
 
+    fn fresh_ledger() -> &'static Mutex<NonceLedger> {
+        Box::leak(Box::new(Mutex::new(NonceLedger::default())))
+    }
+
+    fn session_on(ledger: &'static Mutex<NonceLedger>) -> Arc<SigningSession> {
+        SigningSession::holding(qcore::SigningSession::new(), ledger)
+    }
+
+    fn fresh() -> Arc<SigningSession> {
+        session_on(fresh_ledger())
+    }
+
     fn slotted(index: u64, nonce: u64) -> Arc<SigningSession> {
-        let session = SigningSession::new();
+        let session = fresh();
         let key = address(seed(), index).expect("derives");
-        assert_eq!(session.slot(key, nonce, None, false).expect("free"), nonce);
+        assert_eq!(
+            session.slot(1, key, nonce, None, false).expect("free"),
+            nonce
+        );
         session
     }
 
@@ -1713,52 +2381,65 @@ mod tests {
 
     #[test]
     fn a_slot_is_reserved_until_it_is_signed_or_released() {
-        let session = SigningSession::new();
+        let session = fresh();
         let key = address(seed(), 0).expect("derives");
-        assert_eq!(session.slot(key.clone(), 7, None, false).expect("free"), 7);
+        assert_eq!(
+            session.slot(1, key.clone(), 7, None, false).expect("free"),
+            7
+        );
         assert!(
-            session.slot(key.clone(), 7, None, false).is_err(),
+            session.slot(1, key.clone(), 7, None, false).is_err(),
             "two flows never share a nonce"
         );
-        session.release(key.clone(), 7);
+        session.release(1, key.clone(), 7);
         assert_eq!(
-            session.slot(key.clone(), 7, None, false).expect("released"),
+            session
+                .slot(1, key.clone(), 7, None, false)
+                .expect("released"),
             7
         );
-        session.release_pending(key.clone());
+        session.release_pending(1, key.clone());
         assert_eq!(
-            session.slot(key.clone(), 7, None, false).expect("cleared"),
+            session
+                .slot(1, key.clone(), 7, None, false)
+                .expect("cleared"),
             7
         );
-        session.signed(key.clone(), 7);
-        assert!(session.slot(key.clone(), 7, None, false).is_err());
+        session.signed(1, key.clone(), 7).expect("recorded");
+        assert!(session.slot(1, key.clone(), 7, None, false).is_err());
     }
 
     #[test]
     fn the_session_refuses_a_second_signature_at_the_same_nonce() {
-        let session = SigningSession::new();
+        let session = fresh();
         let key = address(seed(), 0).expect("derives");
-        assert_eq!(session.next_nonce(key.clone()), None);
-        assert_eq!(session.slot(key.clone(), 4, None, false).expect("free"), 4);
-        session.signed(key.clone(), 4);
-        assert!(session.is_held(key.clone(), 4));
+        assert_eq!(session.next_nonce(1, key.clone()), None);
+        assert_eq!(
+            session.slot(1, key.clone(), 4, None, false).expect("free"),
+            4
+        );
+        session.signed(1, key.clone(), 4).expect("recorded");
+        assert!(session.is_held(1, key.clone(), 4));
         assert!(
-            session.slot(key.clone(), 4, None, false).is_err(),
+            session.slot(1, key.clone(), 4, None, false).is_err(),
             "one nonce carries one signature"
         );
         assert!(
-            session.slot(key.clone(), 4, Some(5), false).is_err(),
+            session.slot(1, key.clone(), 4, Some(5), false).is_err(),
             "a nonce other than the expected one is refused"
         );
         assert_eq!(
             session
-                .slot(key.clone(), 4, Some(4), false)
+                .slot(1, key.clone(), 4, Some(4), false)
                 .expect("asked for"),
             4
         );
-        session.outcome(key.clone(), 4, true);
-        assert_eq!(session.next_nonce(key.clone()), Some(5));
-        assert_eq!(session.slot(key.clone(), 5, None, false).expect("next"), 5);
+        session.outcome(1, key.clone(), 4, true).expect("recorded");
+        assert_eq!(session.next_nonce(1, key.clone()), Some(5));
+        assert_eq!(
+            session.slot(1, key.clone(), 5, None, false).expect("next"),
+            5
+        );
     }
 
     #[test]
@@ -1783,15 +2464,27 @@ mod tests {
         index: u64,
         nonce: u64,
     ) -> Result<String, QcoreError> {
-        let to = address(seed(), 9).expect("derives");
+        vault_pay(held, session, 1, index, 9, "5", nonce)
+    }
+
+    fn vault_pay(
+        held: &SeedHandle,
+        session: &Arc<SigningSession>,
+        chain_id: u64,
+        index: u64,
+        to_index: u64,
+        amount: &str,
+        nonce: u64,
+    ) -> Result<String, QcoreError> {
+        let to = address(seed(), to_index).expect("derives");
         held.sign_transfer(
             session.clone(),
             index,
             to,
-            "5".to_string(),
+            amount.to_string(),
             nonce,
             "1".to_string(),
-            1,
+            chain_id,
             300,
             10,
         )
@@ -1803,7 +2496,7 @@ mod tests {
         let me = address(seed(), 0).expect("derives");
         let other = address(seed(), 1).expect("derives");
         let to = address(seed(), 9).expect("derives");
-        let session = SigningSession::new();
+        let session = fresh();
         let refused = vault_transfer(&held, &session, 0, 5)
             .unwrap_err()
             .to_string();
@@ -1864,29 +2557,36 @@ mod tests {
                 10
             )
             .is_err());
-        session.slot(other.clone(), 5, None, false).expect("free");
+        session
+            .slot(1, other.clone(), 5, None, false)
+            .expect("free");
         assert!(
             vault_transfer(&held, &session, 0, 5).is_err(),
             "a slot of another account does not sign for this one"
         );
-        session.slot(me.clone(), 5, None, false).expect("free");
+        session.slot(2, me.clone(), 5, None, false).expect("free");
+        assert!(
+            vault_transfer(&held, &session, 0, 5).is_err(),
+            "a slot on another chain does not sign on this one"
+        );
+        session.slot(1, me.clone(), 5, None, false).expect("free");
         let first = vault_transfer(&held, &session, 0, 5).expect("signs at its slot");
-        assert!(session.is_held(me.clone(), 5));
+        assert!(session.is_held(1, me.clone(), 5));
         assert!(
             vault_transfer(&held, &session, 0, 5).is_err(),
             "a slot carries one signature"
         );
-        assert!(session.slot(me.clone(), 6, None, false).is_err());
+        assert!(session.slot(1, me.clone(), 6, None, false).is_err());
         session
-            .slot(me.clone(), 5, Some(5), false)
+            .slot(1, me.clone(), 5, Some(5), false)
             .expect("asked for again");
-        session.release(me.clone(), 5);
+        session.release(1, me.clone(), 5);
         assert!(
             vault_transfer(&held, &session, 0, 5).is_err(),
             "a released slot does not sign"
         );
         session
-            .slot(me.clone(), 5, Some(5), false)
+            .slot(1, me.clone(), 5, Some(5), false)
             .expect("asked for again");
         let again = vault_transfer(&held, &session, 0, 5).expect("signs");
         assert_eq!(
@@ -1895,12 +2595,50 @@ mod tests {
         );
     }
 
-    fn restarted(saved: Vec<SavedNonces>) -> Arc<SigningSession> {
-        let after = SigningSession::new();
-        for account in saved {
-            after.restore(account.state).expect("restores");
+    #[derive(Default, Clone)]
+    struct Disk {
+        manifest: Option<String>,
+        records: BTreeMap<String, String>,
+    }
+
+    fn persist(ledger: &Mutex<NonceLedger>, disk: &mut Disk) -> Vec<String> {
+        let mut ledger = lock(ledger);
+        let changed = ledger.changes();
+        for account in &changed {
+            let save = ledger
+                .save(account, disk.records.get(account).map(String::as_str))
+                .expect("saves");
+            disk.records.insert(account.clone(), save.state);
+            disk.manifest = Some(save.manifest);
+            ledger.written(account, save.generation);
         }
-        after
+        assert!(ledger.changes().is_empty());
+        changed
+    }
+
+    fn reopen(disk: &Disk) -> &'static Mutex<NonceLedger> {
+        let ledger = fresh_ledger();
+        let accounts = disk
+            .manifest
+            .as_deref()
+            .and_then(|text| nonce_manifest_accounts(text.to_string()).ok())
+            .unwrap_or_default();
+        let listed: Vec<NonceRecord> = accounts
+            .iter()
+            .map(|account| NonceRecord {
+                account: account.clone(),
+                state: disk.records.get(account).cloned(),
+            })
+            .collect();
+        let unlisted: Vec<Option<String>> = disk
+            .records
+            .iter()
+            .filter(|(account, _)| !accounts.contains(account))
+            .map(|(_, state)| Some(state.clone()))
+            .collect();
+        assert!(lock(ledger).restore(disk.manifest.as_deref(), false, &listed, &unlisted));
+        assert!(!lock(ledger).restore(None, false, &[], &[]));
+        ledger
     }
 
     #[test]
@@ -1908,107 +2646,433 @@ mod tests {
         let held = handle();
         let me = address(seed(), 0).expect("derives");
         let other = address(seed(), 1).expect("derives");
-        let before = SigningSession::new();
-        before.slot(me.clone(), 5, None, false).expect("free");
+        let ledger = fresh_ledger();
+        let before = session_on(ledger);
+        let mut disk = Disk::default();
+        before.slot(1, me.clone(), 5, None, false).expect("free");
         vault_transfer(&held, &before, 0, 5).expect("signs");
-        before.slot(other.clone(), 3, None, false).expect("free");
-        let saved = before.saved_accounts().expect("saves");
-        let keys: Vec<&str> = saved.iter().map(|s| s.key.as_str()).collect();
-        assert_eq!(keys.len(), 2);
-        assert!(keys.contains(&me.as_str()) && keys.contains(&other.as_str()));
-        for account in &saved {
-            let doc = qcore::json::parse(&account.state).expect("json");
-            assert_eq!(doc.get("version").and_then(Json::as_u64), Some(1));
-            let entries = doc.get("keys").and_then(Json::as_array).expect("keys");
-            assert_eq!(entries.len(), 1, "each account is saved on its own");
-            assert_eq!(
-                entries[0].get("key").and_then(Json::as_str),
-                Some(account.key.as_str())
-            );
+        before.slot(1, other.clone(), 3, None, false).expect("free");
+        let changed = persist(ledger, &mut disk);
+        assert_eq!(changed.len(), 2);
+        for (account, state) in &disk.records {
+            let doc = qcore::json::parse(state).expect("json");
+            assert_eq!(doc.get("version").and_then(Json::as_u64), Some(2));
+            assert_eq!(doc.get("chain_id").and_then(Json::as_str), Some("1"));
+            let key = doc.get("key").and_then(Json::as_str).expect("key");
+            assert_eq!(account, &account_name(1, key));
         }
 
-        let after = restarted(saved);
-        assert!(after.is_held(me.clone(), 5));
-        assert_eq!(after.next_nonce(me.clone()), Some(5));
+        let after = session_on(reopen(&disk));
+        assert!(after.is_held(1, me.clone(), 5));
+        assert_eq!(after.next_nonce(1, me.clone()), Some(5));
         assert!(
-            after.slot(me.clone(), 6, None, false).is_err(),
+            after.slot(1, me.clone(), 6, None, false).is_err(),
             "the retry waits until the signed nonce is known to have landed"
         );
-        assert!(after.slot(me.clone(), 5, None, false).is_err());
+        assert!(after.slot(1, me.clone(), 5, None, false).is_err());
         assert!(
-            after.is_held(other.clone(), 3),
+            after.is_held(1, other.clone(), 3),
             "a slot reserved when the app stopped may have been signed, so it comes back held"
         );
-        assert!(after.slot(other.clone(), 4, None, false).is_err());
+        assert!(after.slot(1, other.clone(), 4, None, false).is_err());
         assert_eq!(
             after
-                .slot(me.clone(), 6, Some(6), false)
+                .slot(1, me.clone(), 6, Some(6), false)
                 .expect("asked for"),
             6
         );
 
-        before.outcome(me.clone(), 5, true);
-        let later = restarted(before.saved_accounts().expect("saves"));
-        assert_eq!(later.next_nonce(me.clone()), Some(6));
-        assert_eq!(later.slot(me.clone(), 6, None, false).expect("next"), 6);
-
-        let untouched = SigningSession::new();
-        assert!(untouched.saved_accounts().expect("saves").is_empty());
-        let restored_only = restarted(before.saved_accounts().expect("saves"));
-        assert!(
-            restored_only.saved_accounts().expect("saves").is_empty(),
-            "an account is saved again only once this session changes it"
-        );
+        before.outcome(1, me.clone(), 5, true).expect("recorded");
+        assert_eq!(persist(ledger, &mut disk), vec![account_name(1, &me)]);
+        let later = session_on(reopen(&disk));
+        assert_eq!(later.next_nonce(1, me.clone()), Some(6));
+        assert_eq!(later.slot(1, me.clone(), 6, None, false).expect("next"), 6);
+        assert!(later.slot(2, me.clone(), 5, None, false).is_ok());
 
         for bad in [
             "not json",
             "{}",
-            r#"{"version":2,"keys":[]}"#,
-            r#"{"version":1,"keys":[{"key":"a","next":"x","held":[]}]}"#,
-            r#"{"version":1,"keys":[{"held":[]}]}"#,
+            r#"{"version":3,"chain_id":"1","key":"a","generation":"1","held":[]}"#,
+            r#"{"version":2,"chain_id":"1","key":"a","generation":"1","next":"x","held":[]}"#,
+            r#"{"version":2,"key":"a","generation":"1","held":[]}"#,
+            r#"{"version":1,"keys":[{"key":"a","held":[]}]}"#,
         ] {
-            assert!(
-                SigningSession::new().restore(bad.to_string()).is_err(),
-                "{bad}"
-            );
+            assert!(parse_saved(bad).is_err(), "{bad}");
         }
-        assert!(SigningSession::new()
-            .restore("x".repeat(SAVED_STATE_MAX + 1))
-            .is_err());
+        assert!(parse_saved(&"x".repeat(SAVED_STATE_MAX + 1)).is_err());
+        assert!(parse_saved(r#"{"version":1,"keys":[]}"#)
+            .unwrap_err()
+            .contains("earlier format"));
     }
 
     #[test]
     fn a_fresh_session_needs_the_expected_order_nonce() {
         let key = "order key".to_string();
-        let fresh = SigningSession::new();
+        let ledger = fresh_ledger();
+        let fresh = session_on(ledger);
         let refused = fresh
-            .slot(key.clone(), 9, None, true)
+            .slot(1, key.clone(), 9, None, true)
             .unwrap_err()
             .to_string();
         assert!(refused.contains("expected order nonce"), "{refused}");
         assert_eq!(
             fresh
-                .slot(key.clone(), 9, Some(9), true)
+                .slot(1, key.clone(), 9, Some(9), true)
                 .expect("asked for"),
             9
         );
-        fresh.signed(key.clone(), 9);
-        fresh.outcome(key.clone(), 9, true);
+        fresh.signed(1, key.clone(), 9).expect("recorded");
+        fresh.outcome(1, key.clone(), 9, true).expect("recorded");
         assert_eq!(
-            fresh.slot(key.clone(), 10, None, true).expect("tracked"),
+            fresh.slot(1, key.clone(), 10, None, true).expect("tracked"),
             10
         );
-        fresh.release(key.clone(), 10);
+        fresh.release(1, key.clone(), 10);
         assert!(
-            fresh.slot(key.clone(), 12, None, true).is_err(),
+            fresh.slot(1, key.clone(), 12, None, true).is_err(),
             "a jump above the tracked order nonce is refused"
         );
-        let restored = restarted(fresh.saved_accounts().expect("saves"));
+        let mut disk = Disk::default();
+        persist(ledger, &mut disk);
+        let restored = session_on(reopen(&disk));
         assert_eq!(
-            restored.slot(key.clone(), 10, None, true).expect("tracked"),
+            restored
+                .slot(1, key.clone(), 10, None, true)
+                .expect("tracked"),
             10
         );
-        assert!(restored.slot(key, 12, None, true).is_err());
+        assert!(restored.slot(1, key.clone(), 12, None, true).is_err());
+        assert!(
+            restored.slot(2, key, 10, None, true).is_err(),
+            "an order nonce tracked on one chain is not the expected order nonce on another"
+        );
+    }
+
+    #[test]
+    fn every_session_shares_one_nonce_ledger() {
+        let chain = 9_100_001;
+        let held = handle();
+        let me = address(seed(), 0).expect("derives");
+        let first = SigningSession::new();
+        let second = SigningSession::new();
+        assert_eq!(
+            first.slot(chain, me.clone(), 5, None, false).expect("free"),
+            5
+        );
+        let paid = vault_pay(&held, &first, chain, 0, 1, "100", 5).expect("signs at its slot");
+        let refused = second
+            .slot(chain, me.clone(), 5, None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("already signed for nonce 5"), "{refused}");
+        assert!(
+            vault_pay(&held, &second, chain, 0, 2, "999", 5).is_err(),
+            "a second session cannot sign a second transfer at nonce 5"
+        );
+        assert!(second.is_held(chain, me.clone(), 5));
+        assert_eq!(
+            second.slot(chain, me.clone(), 5, Some(5), false).ok(),
+            Some(5)
+        );
+        assert!(!paid.is_empty());
+
+        let ledger = fresh_ledger();
+        let one = session_on(ledger);
+        let two = session_on(ledger);
+        assert_eq!(one.slot(1, me.clone(), 7, None, false).expect("free"), 7);
+        assert!(
+            two.slot(1, me.clone(), 7, None, false).is_err(),
+            "a nonce reserved in one session is reserved in every session"
+        );
+    }
+
+    #[test]
+    fn persistence_writes_only_changed_accounts_and_merges_with_what_is_stored() {
+        let held = handle();
+        let me = address(seed(), 0).expect("derives");
+        let ledger = fresh_ledger();
+        let a = session_on(ledger);
+        let b = session_on(ledger);
+        let mut disk = Disk::default();
+        b.release_pending(1, me.clone());
+        assert!(persist(ledger, &mut disk).is_empty());
+        a.slot(1, me.clone(), 7, None, false).expect("free");
+        vault_pay(&held, &a, 1, 0, 1, "100", 7).expect("signs");
+        assert_eq!(persist(ledger, &mut disk), vec![account_name(1, &me)]);
+        b.slot(1, "Q1UNRELATED".to_string(), 1, None, false)
+            .expect("free");
+        assert_eq!(
+            persist(ledger, &mut disk),
+            vec![account_name(1, "Q1UNRELATED")]
+        );
+        let after = session_on(reopen(&disk));
+        assert!(after.is_held(1, me.clone(), 7));
+        assert!(after.slot(1, me.clone(), 7, None, false).is_err());
+        assert!(
+            after.slot(1, me.clone(), 8, None, false).is_err(),
+            "the retry at 8 waits until 7 is known to have landed"
+        );
+
+        let stale = fresh_ledger();
+        let other_process = session_on(stale);
+        other_process
+            .slot(1, me.clone(), 3, None, false)
+            .expect("free");
+        let mut foreign = disk.clone();
+        persist(stale, &mut foreign);
+        let account = account_name(1, &me);
+        let mine = parse_saved(&disk.records[&account]).expect("mine");
+        let theirs_text = foreign.records[&account].clone();
+        let mut ledger_now = lock(ledger);
+        let save = ledger_now
+            .save(&account, Some(&theirs_text))
+            .expect("merges");
+        let merged = parse_saved(&save.state).expect("merged");
+        assert!(merged.generation > mine.generation);
+        assert!(
+            merged.nonces.held.contains_key(&7) && merged.nonces.held.contains_key(&3),
+            "a write from another view is merged as a union of held nonces"
+        );
+        assert_eq!(merged.nonces.next, Some(7));
+    }
+
+    #[test]
+    fn the_saved_state_is_bounded_when_it_is_written() {
+        let ledger = fresh_ledger();
+        let session = session_on(ledger);
+        let key = "order:Q1DAPPCONTRACT:0".to_string();
+        for i in 0..NONCE_SLOTS_MAX as u64 {
+            session
+                .signed(1, key.clone(), u64::MAX - i)
+                .expect("within the bound");
+        }
+        let refused = session.signed(1, key.clone(), 1).unwrap_err().to_string();
+        assert!(refused.contains("16384"), "{refused}");
+        assert!(session.slot(1, key.clone(), 1, Some(1), false).is_err());
+        let mut disk = Disk::default();
+        persist(ledger, &mut disk);
+        let state = &disk.records[&account_name(1, &key)];
+        assert!(state.len() <= SAVED_STATE_MAX, "{}", state.len());
+        let back = session_on(reopen(&disk));
+        assert!(back.is_held(1, key.clone(), u64::MAX));
+        assert!(back
+            .slot(1, "order:Q1DAPPCONTRACT:1".to_string(), 0, None, false)
+            .is_ok());
+
+        let wide = fresh_ledger();
+        let many = session_on(wide);
+        let long = |i: usize| format!("{i:0>128}");
+        for i in 0..NONCE_ACCOUNTS_MAX {
+            many.slot(u64::MAX, long(i), 0, None, false)
+                .expect("within the bound");
+        }
+        let refused = many
+            .slot(u64::MAX, long(NONCE_ACCOUNTS_MAX), 0, None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("4096"), "{refused}");
+        assert!(many.signed(1, "another".to_string(), 0).is_err());
+        assert!(many.slot(u64::MAX, long(0), 1, Some(1), false).is_ok());
+        {
+            let mut full = lock(wide);
+            for account in full.accounts.values_mut() {
+                account.written = Some(u64::MAX);
+            }
+            let manifest = full.manifest_with(None);
+            assert!(manifest.len() <= SAVED_STATE_MAX, "{}", manifest.len());
+            assert_eq!(
+                nonce_manifest_accounts(manifest).expect("reads").len(),
+                NONCE_ACCOUNTS_MAX
+            );
+        }
+        assert!(fresh()
+            .slot(1, "k".repeat(NONCE_KEY_MAX + 1), 0, None, false)
+            .is_err());
+
+        let steady = fresh_ledger();
+        let walk = session_on(steady);
+        let me = address(seed(), 0).expect("derives");
+        let mut disk = Disk::default();
+        for nonce in 0..500u64 {
+            walk.slot(1, me.clone(), nonce, None, false).expect("next");
+            walk.signed(1, me.clone(), nonce).expect("recorded");
+            walk.outcome(1, me.clone(), nonce, true).expect("recorded");
+            persist(steady, &mut disk);
+        }
+        let saved = parse_saved(&disk.records[&account_name(1, &me)]).expect("saved");
+        assert_eq!(saved.nonces.next, Some(500));
+        assert_eq!(
+            saved.nonces.held.len(),
+            1,
+            "accepted nonces below the next one are pruned"
+        );
+    }
+
+    #[test]
+    fn a_damaged_or_stale_account_blocks_only_itself_until_it_is_reset() {
+        let held = handle();
+        let me = address(seed(), 0).expect("derives");
+        let other = address(seed(), 3).expect("derives");
+        let ledger = fresh_ledger();
+        let session = session_on(ledger);
+        let mut disk = Disk::default();
+        session.slot(1, me.clone(), 5, None, false).expect("free");
+        vault_transfer(&held, &session, 0, 5).expect("signs");
+        session.outcome(1, me.clone(), 5, true).expect("recorded");
+        session
+            .slot(1, other.clone(), 1, None, false)
+            .expect("free");
+        persist(ledger, &mut disk);
+        let older = disk.clone();
+        session.slot(1, me.clone(), 6, None, false).expect("free");
+        vault_transfer(&held, &session, 0, 6).expect("signs");
+        persist(ledger, &mut disk);
+        let mine = account_name(1, &me);
+
+        let mut damaged = disk.clone();
+        damaged.records.insert(mine.clone(), "not json".to_string());
+        let after = session_on(reopen(&damaged));
+        let refused = after
+            .slot(1, me.clone(), 6, None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("reset"), "{refused}");
+        assert!(after.is_held(1, me.clone(), 6));
+        assert!(after.slot(1, me.clone(), 7, Some(7), false).is_err());
+        assert!(
+            after.is_held(1, other.clone(), 1),
+            "another account keeps its state"
+        );
+        assert_eq!(
+            after.slot(2, me.clone(), 6, None, false).ok(),
+            Some(6),
+            "the same address on another chain is its own account"
+        );
+
+        let mut rolled_back = disk.clone();
+        rolled_back
+            .records
+            .insert(mine.clone(), older.records[&mine].clone());
+        let after = session_on(reopen(&rolled_back));
+        let refused = after
+            .slot(1, me.clone(), 6, None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("older"), "{refused}");
+
+        let mut deleted = disk.clone();
+        deleted.records.remove(&mine);
+        let after_ledger = reopen(&deleted);
+        let after = session_on(after_ledger);
+        let refused = after
+            .slot(1, me.clone(), 6, None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("missing"), "{refused}");
+        assert!(after.slot(1, other.clone(), 2, Some(2), false).is_ok());
+        let mut kept = deleted.clone();
+        persist(after_ledger, &mut kept);
+        assert!(
+            session_on(reopen(&kept))
+                .slot(1, me.clone(), 6, None, false)
+                .is_err(),
+            "the blocked account stays listed and blocked after the next restart"
+        );
+        let reset = lock(after_ledger).reset(Some((1, &me))).expect("resets");
+        assert_eq!(reset.removed, vec![mine.clone()]);
+        kept.records.remove(&mine);
+        kept.manifest = Some(reset.manifest);
+        assert_eq!(after.slot(1, me.clone(), 6, None, false).ok(), Some(6));
+        let back = session_on(reopen(&kept));
+        assert!(back.slot(1, me.clone(), 6, None, false).is_ok());
+
+        let mut no_manifest = disk.clone();
+        no_manifest.manifest = None;
+        let blind = reopen(&no_manifest);
+        let refused = session_on(blind)
+            .slot(1, other.clone(), 2, Some(2), false)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("without its manifest"), "{refused}");
+        assert!(lock(blind).reset(Some((1, &other))).is_err());
+        let all = lock(blind).reset(None).expect("resets every account");
+        assert_eq!(all.manifest, r#"{"version":2,"accounts":[]}"#);
+        assert!(session_on(blind)
+            .slot(1, other.clone(), 2, None, false)
+            .is_ok());
+
+        let mut torn = disk.clone();
+        torn.manifest = Some("{".to_string());
+        let ledger = fresh_ledger();
+        assert!(lock(ledger).restore(torn.manifest.as_deref(), false, &[], &[]));
+        assert!(session_on(ledger)
+            .slot(1, other.clone(), 2, Some(2), false)
+            .is_err());
+        let ledger = fresh_ledger();
+        assert!(lock(ledger).restore(None, true, &[], &[]));
+        assert!(session_on(ledger)
+            .slot(1, other, 2, Some(2), false)
+            .is_err());
+
+        let legacy = fresh_ledger();
+        let v1 = r#"{"version":1,"keys":[{"key":"Q1","held":[{"slot":"5","accepted":false}]}]}"#;
+        assert!(lock(legacy).restore(None, false, &[], &[Some(v1.to_string())]));
+        assert!(session_on(legacy).slot(1, me, 5, None, false).is_err());
+    }
+
+    #[test]
+    fn a_nonce_signed_on_one_chain_does_not_block_another() {
+        let held = handle();
+        let me = address(seed(), 0).expect("derives");
+        let ledger = fresh_ledger();
+        let session = session_on(ledger);
+        session.slot(7, me.clone(), 5, None, false).expect("free");
+        let test = vault_pay(&held, &session, 7, 0, 1, "100", 5).expect("signs");
+        assert_eq!(
+            session.slot(8, me.clone(), 5, None, false).ok(),
+            Some(5),
+            "nonce 5 on chain 8 is free"
+        );
+        let main = vault_pay(&held, &session, 8, 0, 1, "100", 5).expect("signs");
+        assert_ne!(test, main);
+        session.outcome(8, me.clone(), 5, true).expect("recorded");
+        let mut disk = Disk::default();
+        persist(ledger, &mut disk);
+        let after = session_on(reopen(&disk));
+        assert!(
+            after.slot(7, me.clone(), 5, None, false).is_err(),
+            "a nonce accepted on chain 8 does not clear the held signature on chain 7"
+        );
+        assert!(after.is_held(7, me.clone(), 5));
+        assert_eq!(after.next_nonce(8, me.clone()), Some(6));
+        assert_eq!(after.next_nonce(7, me), Some(5));
+    }
+
+    #[test]
+    fn the_exported_ledger_restores_once_per_process() {
+        let chain = 9_100_002;
+        let restored = nonce_ledger_restored();
+        let applied = restore_nonce_ledger(None, false, Vec::new(), Vec::new());
+        assert!(nonce_ledger_restored());
+        assert_eq!(applied, !restored);
+        assert!(!restore_nonce_ledger(None, true, Vec::new(), Vec::new()));
+        let session = SigningSession::new();
+        session
+            .slot(chain, "order:Q1EXPORTED".to_string(), 0, None, false)
+            .expect("free");
+        let account = account_name(chain, "order:Q1EXPORTED");
+        assert!(nonce_changes().contains(&account));
+        let save = nonce_save(account.clone(), None).expect("saves");
+        assert!(nonce_manifest_accounts(save.manifest.clone())
+            .expect("manifest")
+            .contains(&account));
+        nonce_written(account.clone(), save.generation);
+        assert!(!nonce_changes().contains(&account));
+        assert!(reset_nonce_state(Some(chain), None).is_err());
+        let reset =
+            reset_nonce_state(Some(chain), Some("order:Q1EXPORTED".to_string())).expect("resets");
+        assert_eq!(reset.removed, vec![account]);
+        assert!(nonce_manifest_accounts("{".to_string()).is_err());
     }
 
     #[test]

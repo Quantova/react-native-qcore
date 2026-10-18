@@ -23,17 +23,20 @@ const from = secureQCore.address('main', 0n);
 
 const session = SigningSession.open([knownPayee]);
 session.checkTarget(to);
-const nonce = session.slot(from, reportedNonce, null, false);
+const nonce = session.slot(chainId, from, reportedNonce, null, false);
 const signed = secureQCore.signTransfer('main', session, 0n, to, '5', nonce, '1', chainId, validUntil, head);
-session.signed(from, nonce);
+session.signed(chainId, from, nonce);
 ```
 
 1. On Android the key that wraps the seed requires user authentication within the last 15 seconds and is held in StrongBox where the device has it. On iOS the seed is a Keychain item that requires user presence and is readable only while a passcode is set.
 2. A seed held in memory is wiped after two minutes of no use and whenever the app goes to the background.
 3. `revealPhrase` asks the user to authenticate again every time and returns the 25 word recovery phrase as bytes, which the app should clear with `wipeBytes` once shown.
-4. The vault signs only at a nonce slot reserved from a `SigningSession` opened by this module. The session state is kept encrypted on the device per account, so a nonce that was signed once is never handed out again after a crash or a restart.
-5. Every signer takes the current chain `head` and refuses a `validUntil` that has already passed or lies more than `maxValidityBlocks()` blocks past it. `boundedValidUntil` gives a deadline inside that window.
-6. Signing for a retired network name is refused.
+4. The vault signs only at a nonce slot reserved from a `SigningSession` opened by this module. Every session in the app shares one nonce ledger, so two open sessions never hand out the same nonce. The ledger keeps each account under its chain id and its address, so a nonce used on one network neither blocks nor clears the same nonce on another.
+5. The nonce ledger is kept encrypted on the device with one record per account and a sealed manifest that names the latest generation of every record. A nonce that was signed once is never handed out again after a crash or a restart, and a record that is older than the manifest, missing or damaged blocks only its own account until it is reset. A missing or damaged manifest blocks every account until the nonce state of every account is reset. On iOS the records are Keychain items bound to this device that never move to another device through a backup, and on Android they live in the folder that is left out of backups.
+6. An account keeps at most 16384 nonces that are signed or reserved and not yet accepted, and the ledger keeps at most 4096 accounts. A call that would go past either limit is refused before anything is signed.
+7. `resetNonceState` clears the saved nonce state of one account, named by its chain id and key, or of every account when no account is named. It asks the user to authenticate again in the same way as `revealPhrase`. Reset an account only once you know which of its signed nonces have landed. Saved nonce state from the earlier format that named no chain is refused and needs this reset.
+8. Every signer takes the current chain `head` and refuses a `validUntil` that has already passed or lies more than `maxValidityBlocks()` blocks past it. `boundedValidUntil` gives a deadline inside that window.
+9. Signing for a retired network name is refused.
 
 ## Low level functions
 

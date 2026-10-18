@@ -107,6 +107,14 @@ RCT_EXTERN_METHOD(vaultRevealPhrase:(NSString *)alias
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(vaultResetNonceState:(NSString *)alias
+                  chainId:(NSString *)chainId
+                  key:(NSString *)key
+                  title:(NSString *)title
+                  subtitle:(NSString *)subtitle
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultHas:(NSString *)alias)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultClose:(NSString *)alias)
@@ -232,25 +240,40 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionRememberAddress:(NSString *)id ad
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionCheckTarget:(NSString *)id address:(NSString *)address)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionSlot:(NSString *)id
+                                        chainId:(NSString *)chainId
                                         key:(NSString *)key
                                         reported:(NSString *)reported
                                         expected:(NSString *)expected
                                         order:(BOOL)order)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionSigned:(NSString *)id key:(NSString *)key slot:(NSString *)slot)
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionSigned:(NSString *)id
+                                        chainId:(NSString *)chainId
+                                        key:(NSString *)key
+                                        slot:(NSString *)slot)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionRelease:(NSString *)id key:(NSString *)key slot:(NSString *)slot)
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionRelease:(NSString *)id
+                                        chainId:(NSString *)chainId
+                                        key:(NSString *)key
+                                        slot:(NSString *)slot)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionReleasePending:(NSString *)id key:(NSString *)key)
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionReleasePending:(NSString *)id
+                                        chainId:(NSString *)chainId
+                                        key:(NSString *)key)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionOutcome:(NSString *)id
+                                        chainId:(NSString *)chainId
                                         key:(NSString *)key
                                         slot:(NSString *)slot
                                         accepted:(BOOL)accepted)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionNextNonce:(NSString *)id key:(NSString *)key)
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionNextNonce:(NSString *)id
+                                        chainId:(NSString *)chainId
+                                        key:(NSString *)key)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionIsHeld:(NSString *)id key:(NSString *)key slot:(NSString *)slot)
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionIsHeld:(NSString *)id
+                                        chainId:(NSString *)chainId
+                                        key:(NSString *)key
+                                        slot:(NSString *)slot)
 
 + (BOOL)requiresMainQueueSetup
 {

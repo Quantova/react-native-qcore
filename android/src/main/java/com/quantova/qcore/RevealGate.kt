@@ -21,9 +21,16 @@ import javax.crypto.SecretKey
 
 internal class RevealGate {
 
-    fun authorize(activity: Activity, title: String, subtitle: String, done: (Throwable?) -> Unit) {
+    fun authorize(
+        activity: Activity,
+        title: String,
+        subtitle: String,
+        cancelled: String = AUTHENTICATION_CANCELLED,
+        unsupported: String = REVEAL_UNSUPPORTED,
+        done: (Throwable?) -> Unit,
+    ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            done(SeedStoreException(REVEAL_UNSUPPORTED))
+            done(SeedStoreException(unsupported))
             return
         }
         val settled = AtomicBoolean(false)
@@ -36,7 +43,7 @@ internal class RevealGate {
         }
         activity.runOnUiThread {
             try {
-                prompt(activity, cipher, title, subtitle, finish)
+                prompt(activity, cipher, title, subtitle, cancelled, finish)
             } catch (error: Throwable) {
                 finish(error)
             }
@@ -44,7 +51,14 @@ internal class RevealGate {
     }
 
     @TargetApi(Build.VERSION_CODES.P)
-    private fun prompt(activity: Activity, cipher: Cipher, title: String, subtitle: String, finish: (Throwable?) -> Unit) {
+    private fun prompt(
+        activity: Activity,
+        cipher: Cipher,
+        title: String,
+        subtitle: String,
+        cancelled: String,
+        finish: (Throwable?) -> Unit,
+    ) {
         val executor = activity.mainExecutor
         val builder = BiometricPrompt.Builder(activity).setTitle(title.ifEmpty { DEFAULT_TITLE })
         if (subtitle.isNotEmpty()) builder.setSubtitle(subtitle)
@@ -52,7 +66,7 @@ internal class RevealGate {
             builder.setAllowedAuthenticators(AUTHENTICATORS)
         } else {
             builder.setNegativeButton(CANCEL_LABEL, executor) { _, _ ->
-                finish(SeedStoreException(AUTHENTICATION_CANCELLED))
+                finish(SeedStoreException(cancelled))
             }
         }
         val callback = object : BiometricPrompt.AuthenticationCallback() {
@@ -61,9 +75,9 @@ internal class RevealGate {
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                val cancelled = errorCode == BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED ||
+                val byUser = errorCode == BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED ||
                     errorCode == BiometricPrompt.BIOMETRIC_ERROR_CANCELED
-                finish(SeedStoreException(if (cancelled) AUTHENTICATION_CANCELLED else SeedStore.AUTHENTICATION_REQUIRED))
+                finish(SeedStoreException(if (byUser) cancelled else SeedStore.AUTHENTICATION_REQUIRED))
             }
         }
         builder.build().authenticate(BiometricPrompt.CryptoObject(cipher), CancellationSignal(), executor, callback)
