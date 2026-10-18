@@ -21,6 +21,7 @@ export interface QCore {
     fee: string,
     chainId: bigint,
     validUntil: bigint,
+    head: bigint,
   ): string;
   sign_call(
     seedHex: string,
@@ -33,6 +34,7 @@ export interface QCore {
     chainId: bigint,
     validUntil: bigint,
     transferFee: string,
+    head: bigint,
   ): string;
   signRegister(
     seedHex: string,
@@ -41,6 +43,7 @@ export interface QCore {
     fee: string,
     chainId: bigint,
     validUntil: bigint,
+    head: bigint,
   ): string;
   chainIdFromName(name: string): bigint;
   signPayableCall(
@@ -55,6 +58,7 @@ export interface QCore {
     chainId: bigint,
     validUntil: bigint,
     transferFee: string,
+    head: bigint,
   ): string;
   signAssetCall(
     seedHex: string,
@@ -69,6 +73,7 @@ export interface QCore {
     chainId: bigint,
     validUntil: bigint,
     transferFee: string,
+    head: bigint,
   ): string;
   nameKey(label: string): string;
   mapSlotKey(mapDomainTag: bigint, keyAddressHex: string): string;
@@ -100,6 +105,7 @@ interface QcoreNative {
     fee: string,
     chainId: string,
     validUntil: string,
+    head: string,
   ): string;
   signCall(
     seedHex: string,
@@ -112,6 +118,7 @@ interface QcoreNative {
     chainId: string,
     validUntil: string,
     transferFee: string,
+    head: string,
   ): string;
   signRegister(
     seedHex: string,
@@ -120,6 +127,7 @@ interface QcoreNative {
     fee: string,
     chainId: string,
     validUntil: string,
+    head: string,
   ): string;
   chainIdFromName(name: string): string;
   signPayableCall(
@@ -134,6 +142,7 @@ interface QcoreNative {
     chainId: string,
     validUntil: string,
     transferFee: string,
+    head: string,
   ): string;
   signAssetCall(
     seedHex: string,
@@ -148,6 +157,7 @@ interface QcoreNative {
     chainId: string,
     validUntil: string,
     transferFee: string,
+    head: string,
   ): string;
   nameKey(label: string): string;
   mapSlotKey(mapDomainTag: string, keyAddressHex: string): string;
@@ -357,6 +367,7 @@ export const nativeQCore: QCore = {
     fee: string,
     chainId: bigint,
     validUntil: bigint,
+    head: bigint,
   ): string {
     return native.signTransfer(
       seedHex,
@@ -367,6 +378,7 @@ export const nativeQCore: QCore = {
       fee,
       u64(chainId),
       u64(validUntil),
+      u64(head),
     );
   },
   sign_call(
@@ -380,6 +392,7 @@ export const nativeQCore: QCore = {
     chainId: bigint,
     validUntil: bigint,
     transferFee: string,
+    head: bigint,
   ): string {
     return native.signCall(
       seedHex,
@@ -392,6 +405,7 @@ export const nativeQCore: QCore = {
       u64(chainId),
       u64(validUntil),
       transferFee,
+      u64(head),
     );
   },
   signRegister(
@@ -401,8 +415,9 @@ export const nativeQCore: QCore = {
     fee: string,
     chainId: bigint,
     validUntil: bigint,
+    head: bigint,
   ): string {
-    return native.signRegister(seedHex, u64(index), u64(nonce), fee, u64(chainId), u64(validUntil));
+    return native.signRegister(seedHex, u64(index), u64(nonce), fee, u64(chainId), u64(validUntil), u64(head));
   },
   chainIdFromName(name: string): bigint {
     return BigInt(native.chainIdFromName(name));
@@ -419,6 +434,7 @@ export const nativeQCore: QCore = {
     chainId: bigint,
     validUntil: bigint,
     transferFee: string,
+    head: bigint,
   ): string {
     return native.signPayableCall(
       seedHex,
@@ -432,6 +448,7 @@ export const nativeQCore: QCore = {
       u64(chainId),
       u64(validUntil),
       transferFee,
+      u64(head),
     );
   },
   signAssetCall(
@@ -447,6 +464,7 @@ export const nativeQCore: QCore = {
     chainId: bigint,
     validUntil: bigint,
     transferFee: string,
+    head: bigint,
   ): string {
     return native.signAssetCall(
       seedHex,
@@ -461,6 +479,7 @@ export const nativeQCore: QCore = {
       u64(chainId),
       u64(validUntil),
       transferFee,
+      u64(head),
     );
   },
   nameKey(label: string): string {

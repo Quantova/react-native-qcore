@@ -489,7 +489,7 @@ class Qcore: NSObject {
         return (lookalikeOf(candidate: candidate, known: list) ?? "") as NSString
     }
 
-    @objc(signTransfer:index:to:amount:nonce:fee:chainId:validUntil:)
+    @objc(signTransfer:index:to:amount:nonce:fee:chainId:validUntil:head:)
     func rnSignTransfer(
         _ seedHex: String,
         index: String,
@@ -498,7 +498,8 @@ class Qcore: NSObject {
         nonce: String,
         fee: String,
         chainId: String,
-        validUntil: String
+        validUntil: String,
+        head: String
     ) -> NSString {
         do {
             return try withSeedHex(seedHex) { seed in
@@ -510,13 +511,14 @@ class Qcore: NSObject {
                     nonce: try u64(nonce, "nonce"),
                     fee: fee,
                     chainId: try u64(chainId, "chain id"),
-                    validUntil: try u64(validUntil, "valid until")
+                    validUntil: try u64(validUntil, "valid until"),
+                    head: try u64(head, "head")
                 ) as NSString
             }
         } catch { return failure(error) }
     }
 
-    @objc(signCall:index:target:argsHex:nonce:meterLimit:fee:chainId:validUntil:transferFee:)
+    @objc(signCall:index:target:argsHex:nonce:meterLimit:fee:chainId:validUntil:transferFee:head:)
     func rnSignCall(
         _ seedHex: String,
         index: String,
@@ -527,7 +529,8 @@ class Qcore: NSObject {
         fee: String,
         chainId: String,
         validUntil: String,
-        transferFee: String
+        transferFee: String,
+        head: String
     ) -> NSString {
         do {
             return try withSeedHex(seedHex) { seed in
@@ -541,20 +544,22 @@ class Qcore: NSObject {
                     fee: fee,
                     chainId: try u64(chainId, "chain id"),
                     validUntil: try u64(validUntil, "valid until"),
-                    transferFee: transferFee
+                    transferFee: transferFee,
+                    head: try u64(head, "head")
                 ) as NSString
             }
         } catch { return failure(error) }
     }
 
-    @objc(signRegister:index:nonce:fee:chainId:validUntil:)
+    @objc(signRegister:index:nonce:fee:chainId:validUntil:head:)
     func rnSignRegister(
         _ seedHex: String,
         index: String,
         nonce: String,
         fee: String,
         chainId: String,
-        validUntil: String
+        validUntil: String,
+        head: String
     ) -> NSString {
         do {
             return try withSeedHex(seedHex) { seed in
@@ -564,13 +569,14 @@ class Qcore: NSObject {
                     nonce: try u64(nonce, "nonce"),
                     fee: fee,
                     chainId: try u64(chainId, "chain id"),
-                    validUntil: try u64(validUntil, "valid until")
+                    validUntil: try u64(validUntil, "valid until"),
+                    head: try u64(head, "head")
                 ) as NSString
             }
         } catch { return failure(error) }
     }
 
-    @objc(signPayableCall:index:target:argsHex:nonce:meterLimit:fee:value:chainId:validUntil:transferFee:)
+    @objc(signPayableCall:index:target:argsHex:nonce:meterLimit:fee:value:chainId:validUntil:transferFee:head:)
     func rnSignPayableCall(
         _ seedHex: String,
         index: String,
@@ -582,7 +588,8 @@ class Qcore: NSObject {
         value: String,
         chainId: String,
         validUntil: String,
-        transferFee: String
+        transferFee: String,
+        head: String
     ) -> NSString {
         do {
             return try withSeedHex(seedHex) { seed in
@@ -597,13 +604,14 @@ class Qcore: NSObject {
                     value: value,
                     chainId: try u64(chainId, "chain id"),
                     validUntil: try u64(validUntil, "valid until"),
-                    transferFee: transferFee
+                    transferFee: transferFee,
+                    head: try u64(head, "head")
                 ) as NSString
             }
         } catch { return failure(error) }
     }
 
-    @objc(signAssetCall:index:target:argsHex:assetIssuer:amount:nonce:meterLimit:fee:chainId:validUntil:transferFee:)
+    @objc(signAssetCall:index:target:argsHex:assetIssuer:amount:nonce:meterLimit:fee:chainId:validUntil:transferFee:head:)
     func rnSignAssetCall(
         _ seedHex: String,
         index: String,
@@ -616,7 +624,8 @@ class Qcore: NSObject {
         fee: String,
         chainId: String,
         validUntil: String,
-        transferFee: String
+        transferFee: String,
+        head: String
     ) -> NSString {
         do {
             return try withSeedHex(seedHex) { seed in
@@ -632,7 +641,8 @@ class Qcore: NSObject {
                     fee: fee,
                     chainId: try u64(chainId, "chain id"),
                     validUntil: try u64(validUntil, "valid until"),
-                    transferFee: transferFee
+                    transferFee: transferFee,
+                    head: try u64(head, "head")
                 ) as NSString
             }
         } catch { return failure(error) }

@@ -345,6 +345,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         fee: String,
         chainId: String,
         validUntil: String,
+        head: String,
     ): String = guarded {
         withSeedHex(seedHex) { seed ->
             uniffi.quantova_qcore.signTransfer(
@@ -356,6 +357,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
                 fee,
                 u64(chainId, "chain id"),
                 u64(validUntil, "valid until"),
+                u64(head, "head"),
             )
         }
     }
@@ -372,6 +374,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         chainId: String,
         validUntil: String,
         transferFee: String,
+        head: String,
     ): String = guarded {
         withSeedHex(seedHex) { seed ->
             uniffi.quantova_qcore.signCall(
@@ -385,6 +388,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
                 u64(chainId, "chain id"),
                 u64(validUntil, "valid until"),
                 transferFee,
+                u64(head, "head"),
             )
         }
     }
@@ -397,6 +401,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         fee: String,
         chainId: String,
         validUntil: String,
+        head: String,
     ): String = guarded {
         withSeedHex(seedHex) { seed ->
             uniffi.quantova_qcore.signRegister(
@@ -406,6 +411,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
                 fee,
                 u64(chainId, "chain id"),
                 u64(validUntil, "valid until"),
+                u64(head, "head"),
             )
         }
     }
@@ -428,6 +434,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         chainId: String,
         validUntil: String,
         transferFee: String,
+        head: String,
     ): String = guarded {
         withSeedHex(seedHex) { seed ->
             uniffi.quantova_qcore.signPayableCall(
@@ -442,6 +449,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
                 u64(chainId, "chain id"),
                 u64(validUntil, "valid until"),
                 transferFee,
+                u64(head, "head"),
             )
         }
     }
@@ -460,6 +468,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         chainId: String,
         validUntil: String,
         transferFee: String,
+        head: String,
     ): String = guarded {
         withSeedHex(seedHex) { seed ->
             uniffi.quantova_qcore.signAssetCall(
@@ -475,6 +484,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
                 u64(chainId, "chain id"),
                 u64(validUntil, "valid until"),
                 transferFee,
+                u64(head, "head"),
             )
         }
     }

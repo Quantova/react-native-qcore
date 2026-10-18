@@ -118,6 +118,7 @@ fn transfer_with(
     fee: &str,
     chain_id: u64,
     valid_until: u64,
+    head: u64,
 ) -> Result<String, QcoreError> {
     let signed = qcore::sign_transfer(
         seed,
@@ -128,6 +129,7 @@ fn transfer_with(
         parse_fee(fee)?,
         chain_id,
         valid_until,
+        head,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -145,6 +147,7 @@ fn call_with(
     chain_id: u64,
     valid_until: u64,
     transfer_fee: &str,
+    head: u64,
 ) -> Result<String, QcoreError> {
     let args = from_hex(args_hex).map_err(err)?;
     let signed = qcore::sign_call(
@@ -158,6 +161,7 @@ fn call_with(
         chain_id,
         valid_until,
         parse_fee(transfer_fee)?,
+        head,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -170,9 +174,18 @@ fn register_with(
     fee: &str,
     chain_id: u64,
     valid_until: u64,
+    head: u64,
 ) -> Result<String, QcoreError> {
-    let signed = qcore::sign_register(seed, index, nonce, parse_fee(fee)?, chain_id, valid_until)
-        .map_err(err)?;
+    let signed = qcore::sign_register(
+        seed,
+        index,
+        nonce,
+        parse_fee(fee)?,
+        chain_id,
+        valid_until,
+        head,
+    )
+    .map_err(err)?;
     Ok(signed_json(signed))
 }
 
@@ -189,6 +202,7 @@ fn payable_call_with(
     chain_id: u64,
     valid_until: u64,
     transfer_fee: &str,
+    head: u64,
 ) -> Result<String, QcoreError> {
     let args = from_hex(args_hex).map_err(err)?;
     let signed = qcore::sign_payable_call(
@@ -203,6 +217,7 @@ fn payable_call_with(
         chain_id,
         valid_until,
         parse_fee(transfer_fee)?,
+        head,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -222,6 +237,7 @@ fn asset_call_with(
     chain_id: u64,
     valid_until: u64,
     transfer_fee: &str,
+    head: u64,
 ) -> Result<String, QcoreError> {
     let args = from_hex(args_hex).map_err(err)?;
     let signed = qcore::sign_asset_call(
@@ -237,6 +253,7 @@ fn asset_call_with(
         chain_id,
         valid_until,
         parse_fee(transfer_fee)?,
+        head,
     )
     .map_err(err)?;
     Ok(signed_json(signed))
@@ -297,6 +314,7 @@ pub fn sign_transfer(
     fee: String,
     chain_id: u64,
     valid_until: u64,
+    head: u64,
 ) -> Result<String, QcoreError> {
     let seed = parse_seed(seed)?;
     transfer_with(
@@ -308,6 +326,7 @@ pub fn sign_transfer(
         &fee,
         chain_id,
         valid_until,
+        head,
     )
 }
 
@@ -324,6 +343,7 @@ pub fn sign_call(
     chain_id: u64,
     valid_until: u64,
     transfer_fee: String,
+    head: u64,
 ) -> Result<String, QcoreError> {
     let seed = parse_seed(seed)?;
     call_with(
@@ -337,6 +357,7 @@ pub fn sign_call(
         chain_id,
         valid_until,
         &transfer_fee,
+        head,
     )
 }
 
@@ -348,9 +369,10 @@ pub fn sign_register(
     fee: String,
     chain_id: u64,
     valid_until: u64,
+    head: u64,
 ) -> Result<String, QcoreError> {
     let seed = parse_seed(seed)?;
-    register_with(&seed, index, nonce, &fee, chain_id, valid_until)
+    register_with(&seed, index, nonce, &fee, chain_id, valid_until, head)
 }
 
 #[uniffi::export]
@@ -382,6 +404,7 @@ pub fn sign_payable_call(
     chain_id: u64,
     valid_until: u64,
     transfer_fee: String,
+    head: u64,
 ) -> Result<String, QcoreError> {
     let seed = parse_seed(seed)?;
     payable_call_with(
@@ -396,6 +419,7 @@ pub fn sign_payable_call(
         chain_id,
         valid_until,
         &transfer_fee,
+        head,
     )
 }
 
@@ -414,6 +438,7 @@ pub fn sign_asset_call(
     chain_id: u64,
     valid_until: u64,
     transfer_fee: String,
+    head: u64,
 ) -> Result<String, QcoreError> {
     let seed = parse_seed(seed)?;
     asset_call_with(
@@ -429,6 +454,7 @@ pub fn sign_asset_call(
         chain_id,
         valid_until,
         &transfer_fee,
+        head,
     )
 }
 
@@ -780,6 +806,7 @@ impl SeedHandle {
                     &fee,
                     chain_id,
                     valid_until,
+                    head,
                 )
             })
         })
@@ -814,6 +841,7 @@ impl SeedHandle {
                     chain_id,
                     valid_until,
                     &transfer_fee,
+                    head,
                 )
             })
         })
@@ -833,7 +861,7 @@ impl SeedHandle {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
             session.signing(&qcore::account_address(seed, index), nonce, || {
-                register_with(seed, index, nonce, &fee, chain_id, valid_until)
+                register_with(seed, index, nonce, &fee, chain_id, valid_until, head)
             })
         })
     }
@@ -869,6 +897,7 @@ impl SeedHandle {
                     chain_id,
                     valid_until,
                     &transfer_fee,
+                    head,
                 )
             })
         })
@@ -907,6 +936,7 @@ impl SeedHandle {
                     chain_id,
                     valid_until,
                     &transfer_fee,
+                    head,
                 )
             })
         })
@@ -1167,6 +1197,7 @@ mod tests {
                     "1".to_string(),
                     1,
                     300,
+                    0,
                 )
                 .is_err(),
                 "a transfer to {bad:?} must return an error, not sign and not panic"
@@ -1199,6 +1230,7 @@ mod tests {
                     "1".to_string(),
                     1,
                     300,
+                    0,
                 )
                 .is_err(),
                 "signing under a seed of {} bytes must be refused",
@@ -1235,6 +1267,7 @@ mod tests {
                 "1".to_string(),
                 1,
                 300,
+                0,
             )
             .expect("a good transfer signs")
         };
@@ -1312,6 +1345,7 @@ mod tests {
                 1,
                 300,
                 "500".to_string(),
+                0,
             )
         };
         assert!(call(21_000, "9000", "").is_ok());
@@ -1334,6 +1368,7 @@ mod tests {
             1,
             300,
             "500".to_string(),
+            0,
         )
         .is_err());
         assert!(sign_asset_call(
@@ -1349,6 +1384,7 @@ mod tests {
             1,
             300,
             "500".to_string(),
+            0,
         )
         .is_err());
     }
@@ -1367,6 +1403,7 @@ mod tests {
                 "1".to_string(),
                 1,
                 valid_until,
+                0,
             )
         };
         assert!(sign(own, "5", 300).is_err());
@@ -1420,6 +1457,7 @@ mod tests {
             "1".to_string(),
             1,
             300,
+            0,
         )
         .expect("the seed path signs");
         let by_handle = handle()
@@ -1441,7 +1479,8 @@ mod tests {
             .expect("the handle registers");
         assert_eq!(
             register,
-            sign_register(seed(), 0, 0, "1".to_string(), 1, 300).expect("the seed path registers")
+            sign_register(seed(), 0, 0, "1".to_string(), 1, 300, 0,)
+                .expect("the seed path registers")
         );
         let call = handle()
             .sign_call(
@@ -1471,6 +1510,7 @@ mod tests {
                 1,
                 300,
                 "500".to_string(),
+                0,
             )
             .expect("the seed path calls")
         );
