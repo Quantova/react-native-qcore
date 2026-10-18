@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 import Foundation
+import LocalAuthentication
 import Security
+import UIKit
 
 @objc(Qcore)
 class Qcore: NSObject {
@@ -25,12 +27,73 @@ class Qcore: NSObject {
 
     private static let idleSeconds: TimeInterval = 120
 
+    private static let maxSessions = 64
+
+    private static let tooManySessions = "too many signing sessions are open, close one first"
+
+    private let idleQueue = DispatchQueue(label: "com.quantova.qcore.idle")
+
+    private var idleTimer: DispatchSourceTimer?
+
+    override init() {
+        super.init()
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(hostLeftForeground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(hostLeftForeground), name: UIApplication.willResignActiveNotification, object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        idleTimer?.cancel()
+    }
+
+    @objc private func hostLeftForeground() {
+        locked { forgetHeld() }
+    }
+
     private func expireIdle() {
         let now = ProcessInfo.processInfo.systemUptime
-        for (alias, at) in heldAt where now - at > Self.idleSeconds {
+        for (alias, at) in heldAt where now - at >= Self.idleSeconds {
             held.removeValue(forKey: alias)?.forget()
             heldAt.removeValue(forKey: alias)
         }
+        armIdleTimer(now)
+    }
+
+    private func armIdleTimer(_ now: TimeInterval) {
+        idleTimer?.cancel()
+        idleTimer = nil
+        guard let oldest = heldAt.values.min() else { return }
+        let timer = DispatchSource.makeTimerSource(queue: idleQueue)
+        timer.schedule(deadline: .now() + max(0, oldest + Self.idleSeconds - now))
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            self.locked { self.expireIdle() }
+        }
+        idleTimer = timer
+        timer.resume()
+    }
+
+    private func touch(_ alias: String) {
+        let now = ProcessInfo.processInfo.systemUptime
+        heldAt[alias] = now
+        armIdleTimer(now)
+    }
+
+    private func drop(_ alias: String) {
+        held.removeValue(forKey: alias)?.forget()
+        heldAt.removeValue(forKey: alias)
+        armIdleTimer(ProcessInfo.processInfo.systemUptime)
+    }
+
+    private func forgetHeld() {
+        idleTimer?.cancel()
+        idleTimer = nil
+        for handle in held.values {
+            handle.forget()
+        }
+        held.removeAll()
+        heldAt.removeAll()
     }
 
     private var sessions: [String: SigningSession] = [:]
@@ -201,10 +264,13 @@ class Qcore: NSObject {
             }
         }
 
-        static func load(_ alias: String) throws -> Data {
+        static func load(_ alias: String, context: LAContext? = nil) throws -> Data {
             var search = query(alias)
             search[kSecReturnData as String] = true
             search[kSecMatchLimit as String] = kSecMatchLimitOne
+            if let context = context {
+                search[kSecUseAuthenticationContext as String] = context
+            }
             var found: CFTypeRef?
             let status = SecItemCopyMatching(search as CFDictionary, &found)
             if status == errSecItemNotFound {
@@ -228,18 +294,27 @@ class Qcore: NSObject {
     }
 
     private func handleFor(_ alias: String) throws -> SeedHandle {
-        return try locked {
-            let alias = try checkedAlias(alias)
+        let alias = try checkedAlias(alias)
+        let found: SeedHandle? = locked {
             expireIdle()
-            if let found = held[alias] {
-                heldAt[alias] = ProcessInfo.processInfo.systemUptime
-                return found
+            guard let found = held[alias] else { return nil }
+            touch(alias)
+            return found
+        }
+        if let found = found {
+            return found
+        }
+        var seed = try Keychain.load(alias)
+        defer { wipe(&seed) }
+        let handle = try SeedHandle.fromSeedBytes(seed: seed)
+        return locked {
+            if let raced = held[alias] {
+                handle.forget()
+                touch(alias)
+                return raced
             }
-            var seed = try Keychain.load(alias)
-            defer { wipe(&seed) }
-            let handle = try SeedHandle.fromSeedBytes(seed: seed)
             held[alias] = handle
-            heldAt[alias] = ProcessInfo.processInfo.systemUptime
+            touch(alias)
             return handle
         }
     }
@@ -261,7 +336,7 @@ class Qcore: NSObject {
             }
             held[alias]?.forget()
             held[alias] = handle
-            heldAt[alias] = ProcessInfo.processInfo.systemUptime
+            touch(alias)
         }
     }
 
@@ -273,12 +348,9 @@ class Qcore: NSObject {
     }
 
     @objc func invalidate() {
+        NotificationCenter.default.removeObserver(self)
         locked {
-            for handle in held.values {
-                handle.forget()
-            }
-            held.removeAll()
-            heldAt.removeAll()
+            forgetHeld()
             sessions.removeAll()
         }
     }
@@ -568,11 +640,28 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
-    @objc(vaultRevealPhrase:)
-    func rnVaultRevealPhrase(_ alias: String) -> NSString {
+    @objc(vaultRevealPhrase:title:subtitle:resolver:rejecter:)
+    func rnVaultRevealPhrase(
+        _ alias: String,
+        title: String,
+        subtitle: String,
+        resolver resolve: @escaping (Any?) -> Void,
+        rejecter reject: @escaping (String?, String?, Error?) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            resolve(self.revealNow(alias, title: title, subtitle: subtitle))
+        }
+    }
+
+    private func revealNow(_ alias: String, title: String, subtitle: String) -> NSString {
         do {
             let alias = try checkedAlias(alias)
-            var seed = try Keychain.load(alias)
+            let context = LAContext()
+            context.touchIDAuthenticationAllowableReuseDuration = 0
+            let reason = [title, subtitle].filter { !$0.isEmpty }.joined(separator: ". ")
+            context.localizedReason = reason.isEmpty ? "Reveal recovery phrase" : reason
+            defer { context.invalidate() }
+            var seed = try Keychain.load(alias, context: context)
             defer { wipe(&seed) }
             let handle = try SeedHandle.fromSeedBytes(seed: seed)
             defer { handle.forget() }
@@ -598,10 +687,16 @@ class Qcore: NSObject {
         do {
             try locked {
                 let alias = try checkedAlias(alias)
-                held.removeValue(forKey: alias)?.forget()
+                drop(alias)
             }
             return ""
         } catch { return failure(error) }
+    }
+
+    @objc(vaultCloseAll)
+    func rnVaultCloseAll() -> NSString {
+        locked { forgetHeld() }
+        return ""
     }
 
     @objc(vaultForget:)
@@ -609,7 +704,7 @@ class Qcore: NSObject {
         do {
             try locked {
                 let alias = try checkedAlias(alias)
-                held.removeValue(forKey: alias)?.forget()
+                drop(alias)
                 try Keychain.remove(alias)
             }
             return ""
@@ -848,6 +943,37 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
+    @objc(verifyTransaction:txId:leafHex:stepsJson:)
+    func rnVerifyTransaction(_ transactionRootHex: String, txId: String, leafHex: String, stepsJson: String) -> NSString {
+        do {
+            return String(try verifyTransaction(
+                transactionRootHex: transactionRootHex,
+                txId: txId,
+                leafHex: leafHex,
+                stepsJson: stepsJson
+            )) as NSString
+        } catch { return failure(error) }
+    }
+
+    @objc(confirmTransaction:txId:proofJson:finalityJson:rosterJson:)
+    func rnConfirmTransaction(
+        _ chainId: String,
+        txId: String,
+        proofJson: String,
+        finalityJson: String,
+        rosterJson: String
+    ) -> NSString {
+        do {
+            return try confirmTransaction(
+                chainId: try u64(chainId, "chain id"),
+                txId: txId,
+                proofJson: proofJson,
+                finalityJson: finalityJson,
+                rosterJson: rosterJson
+            ) as NSString
+        } catch { return failure(error) }
+    }
+
     @objc(decodeEvent:)
     func rnDecodeEvent(_ leafHex: String) -> NSString {
         do {
@@ -859,9 +985,19 @@ class Qcore: NSObject {
     func rnSessionOpen(_ addressBook: String) -> NSString {
         do {
             let book = addressBook.split(separator: ",").map(String.init)
+            if locked({ sessions.count >= Self.maxSessions }) {
+                throw BridgeError(message: Self.tooManySessions)
+            }
             let opened = book.isEmpty ? SigningSession() : try SigningSession.withAddressBook(book: book)
             let id = UUID().uuidString
-            locked { sessions[id] = opened }
+            let admitted: Bool = locked {
+                guard sessions.count < Self.maxSessions else { return false }
+                sessions[id] = opened
+                return true
+            }
+            guard admitted else {
+                throw BridgeError(message: Self.tooManySessions)
+            }
             return id as NSString
         } catch { return failure(error) }
     }

@@ -5,14 +5,21 @@ package com.quantova.qcore
 
 import android.os.SystemClock
 import android.util.Base64
+import com.facebook.react.bridge.LifecycleEventListener
+import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import uniffi.quantova_qcore.SeedHandle
 import uniffi.quantova_qcore.SigningSession
 
-class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+class QcoreModule(reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext),
+    LifecycleEventListener {
 
     override fun getName(): String = NAME
 
@@ -26,13 +33,54 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
 
     private val heldAt = HashMap<String, Long>()
 
+    private val worker = Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task, "qcore-vault").apply { isDaemon = true }
+    }
+
+    private var idleTimer: ScheduledFuture<*>? = null
+
+    private val revealGate by lazy { RevealGate() }
+
+    init {
+        reactContext.addLifecycleEventListener(this)
+    }
+
     private fun expireIdle() {
         val now = SystemClock.elapsedRealtime()
-        val stale = heldAt.filterValues { now - it > IDLE_MILLIS }.keys.toList()
+        val stale = heldAt.filterValues { now - it >= IDLE_MILLIS }.keys.toList()
         for (alias in stale) {
             held.remove(alias)?.let { release(it) }
             heldAt.remove(alias)
         }
+        armIdleTimer(now)
+    }
+
+    private fun armIdleTimer(now: Long) {
+        idleTimer?.cancel(false)
+        idleTimer = null
+        val oldest = heldAt.values.minOrNull() ?: return
+        val delay = (oldest + IDLE_MILLIS - now).coerceAtLeast(0L)
+        idleTimer = worker.schedule({ synchronized(lock) { expireIdle() } }, delay, TimeUnit.MILLISECONDS)
+    }
+
+    private fun touch(alias: String) {
+        val now = SystemClock.elapsedRealtime()
+        heldAt[alias] = now
+        armIdleTimer(now)
+    }
+
+    private fun drop(alias: String) {
+        held.remove(alias)?.let { release(it) }
+        heldAt.remove(alias)
+        armIdleTimer(SystemClock.elapsedRealtime())
+    }
+
+    private fun forgetHeld() {
+        idleTimer?.cancel(false)
+        idleTimer = null
+        held.values.forEach { release(it) }
+        held.clear()
+        heldAt.clear()
     }
 
     private val sessions = HashMap<String, SigningSession>()
@@ -140,9 +188,9 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     }
 
     private fun handleFor(alias: String): SeedHandle = synchronized(lock) {
+        checkedAlias(alias)
         expireIdle()
-        heldAt[checkedAlias(alias)] = SystemClock.elapsedRealtime()
-        held[alias] ?: run {
+        val handle = held[alias] ?: run {
             val seed = store.load(alias) ?: throw BridgeException("no seed is stored under this alias")
             try {
                 SeedHandle.fromSeedBytes(seed)
@@ -150,6 +198,8 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
                 seed.fill(0)
             }
         }.also { held[alias] = it }
+        touch(alias)
+        handle
     }
 
     private fun keep(alias: String, make: () -> SeedHandle) {
@@ -170,21 +220,31 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
                 throw error
             }
             held.put(alias, handle)?.let { release(it) }
-            heldAt[alias] = SystemClock.elapsedRealtime()
+            touch(alias)
         }
     }
 
     private fun session(id: String): SigningSession =
         synchronized(lock) { sessions[id] } ?: throw BridgeException("no signing session is open under this id")
 
+    override fun onHostResume() {}
+
+    override fun onHostPause() {
+        synchronized(lock) { forgetHeld() }
+    }
+
+    override fun onHostDestroy() {
+        synchronized(lock) { forgetHeld() }
+    }
+
     override fun invalidate() {
+        reactApplicationContext.removeLifecycleEventListener(this)
         synchronized(lock) {
-            held.values.forEach { release(it) }
-            held.clear()
-            heldAt.clear()
+            forgetHeld()
             sessions.values.forEach { it.destroy() }
             sessions.clear()
         }
+        worker.shutdownNow()
         super.invalidate()
     }
 
@@ -457,8 +517,28 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         ""
     }
 
-    @ReactMethod(isBlockingSynchronousMethod = true)
-    fun vaultRevealPhrase(alias: String): String = guarded {
+    @ReactMethod
+    fun vaultRevealPhrase(alias: String, title: String, subtitle: String, promise: Promise) {
+        val activity = try {
+            synchronized(lock) {
+                if (!store.has(checkedAlias(alias))) throw BridgeException("no seed is stored under this alias")
+            }
+            reactApplicationContext.currentActivity
+                ?: throw BridgeException("the phrase can be revealed only while the app is in the foreground")
+        } catch (error: Throwable) {
+            promise.resolve(failure(error))
+            return
+        }
+        revealGate.authorize(activity, title, subtitle) { refused ->
+            try {
+                worker.execute { promise.resolve(if (refused != null) failure(refused) else guarded { revealNow(alias) }) }
+            } catch (error: Throwable) {
+                promise.resolve(failure(error))
+            }
+        }
+    }
+
+    private fun revealNow(alias: String): String {
         val handle = synchronized(lock) {
             val seed = store.load(checkedAlias(alias)) ?: throw BridgeException("no seed is stored under this alias")
             try {
@@ -470,7 +550,7 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         try {
             val phrase = handle.phraseBytes()
             try {
-                base64Of(phrase)
+                return base64Of(phrase)
             } finally {
                 phrase.fill(0)
             }
@@ -488,14 +568,20 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultClose(alias: String): String = guarded {
-        synchronized(lock) { held.remove(checkedAlias(alias)) }?.let { release(it) }
+        synchronized(lock) { drop(checkedAlias(alias)) }
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultCloseAll(): String = guarded {
+        synchronized(lock) { forgetHeld() }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultForget(alias: String): String = guarded {
         synchronized(lock) {
-            held.remove(checkedAlias(alias))?.let { release(it) }
+            drop(checkedAlias(alias))
             store.remove(alias)
         }
         ""
@@ -705,6 +791,22 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
+    fun verifyTransaction(transactionRootHex: String, txId: String, leafHex: String, stepsJson: String): String = guarded {
+        uniffi.quantova_qcore.verifyTransaction(transactionRootHex, txId, leafHex, stepsJson).toString()
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun confirmTransaction(
+        chainId: String,
+        txId: String,
+        proofJson: String,
+        finalityJson: String,
+        rosterJson: String,
+    ): String = guarded {
+        uniffi.quantova_qcore.confirmTransaction(u64(chainId, "chain id"), txId, proofJson, finalityJson, rosterJson)
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
     fun decodeEvent(leafHex: String): String = guarded {
         uniffi.quantova_qcore.decodeEvent(leafHex)
     }
@@ -712,9 +814,18 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun sessionOpen(addressBook: String): String = guarded {
         val book = addressBook.split(",").filter { it.isNotEmpty() }
+        synchronized(lock) {
+            if (sessions.size >= MAX_SESSIONS) throw BridgeException(TOO_MANY_SESSIONS)
+        }
         val opened = if (book.isEmpty()) SigningSession() else SigningSession.withAddressBook(book)
         val id = UUID.randomUUID().toString()
-        synchronized(lock) { sessions[id] = opened }
+        val admitted = synchronized(lock) {
+            (sessions.size < MAX_SESSIONS).also { if (it) sessions[id] = opened }
+        }
+        if (!admitted) {
+            opened.destroy()
+            throw BridgeException(TOO_MANY_SESSIONS)
+        }
         id
     }
 
@@ -789,6 +900,8 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         const val NAME = "Qcore"
         const val FAILURE_PREFIX = "\u0000QCORE_ERROR:"
         private const val IDLE_MILLIS = 120_000L
+        private const val MAX_SESSIONS = 64
+        private const val TOO_MANY_SESSIONS = "too many signing sessions are open, close one first"
         private val HEX = "0123456789abcdef".toCharArray()
     }
 }

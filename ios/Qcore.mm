@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 #import <React/RCTBridgeModule.h>
+#import <React/RCTInvalidating.h>
 
 @interface RCT_EXTERN_MODULE(Qcore, NSObject)
 
@@ -95,11 +96,17 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultImportPhrase:(NSString *)alias
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultImportSeed:(NSString *)alias
                                         seedBase64:(NSString *)seedBase64)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultRevealPhrase:(NSString *)alias)
+RCT_EXTERN_METHOD(vaultRevealPhrase:(NSString *)alias
+                  title:(NSString *)title
+                  subtitle:(NSString *)subtitle
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultHas:(NSString *)alias)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultClose:(NSString *)alias)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultCloseAll)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultForget:(NSString *)alias)
 
@@ -191,6 +198,17 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(verifyEvent:(NSString *)eventRootHex
                                         leafHex:(NSString *)leafHex
                                         stepsJson:(NSString *)stepsJson)
 
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(verifyTransaction:(NSString *)transactionRootHex
+                                        txId:(NSString *)txId
+                                        leafHex:(NSString *)leafHex
+                                        stepsJson:(NSString *)stepsJson)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(confirmTransaction:(NSString *)chainId
+                                        txId:(NSString *)txId
+                                        proofJson:(NSString *)proofJson
+                                        finalityJson:(NSString *)finalityJson
+                                        rosterJson:(NSString *)rosterJson)
+
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(decodeEvent:(NSString *)leafHex)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionOpen:(NSString *)addressBook)
@@ -230,3 +248,12 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionIsHeld:(NSString *)id key:(NSStri
 }
 
 @end
+
+@interface Qcore (QcoreInvalidating) <RCTInvalidating>
+@end
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wprotocol"
+@implementation Qcore (QcoreInvalidating)
+@end
+#pragma clang diagnostic pop

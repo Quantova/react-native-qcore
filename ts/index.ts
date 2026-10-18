@@ -77,6 +77,8 @@ export interface QCore {
   checkOrderExpiry(expiry: bigint, nowSecs: bigint): void;
   verifyFinality(chainId: bigint, headerHex: string, certificateHex: string, rosterJson: string): string;
   verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): boolean;
+  verifyTransaction(transactionRootHex: string, txId: string, leafHex: string, stepsJson: string): boolean;
+  confirmTransaction(chainId: bigint, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
   decodeEvent(leafHex: string): string;
 }
 
@@ -154,9 +156,10 @@ interface QcoreNative {
   vaultCreate(alias: string): string;
   vaultImportPhrase(alias: string, phraseBase64: string): string;
   vaultImportSeed(alias: string, seedBase64: string): string;
-  vaultRevealPhrase(alias: string): string;
+  vaultRevealPhrase(alias: string, title: string, subtitle: string): Promise<string>;
   vaultHas(alias: string): string;
   vaultClose(alias: string): string;
+  vaultCloseAll(): string;
   vaultForget(alias: string): string;
   vaultAddress(alias: string, index: string): string;
   vaultSignTransfer(
@@ -237,6 +240,8 @@ interface QcoreNative {
   maxOrderLifetimeSecs(): string;
   verifyFinality(chainId: string, headerHex: string, certificateHex: string, rosterJson: string): string;
   verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): string;
+  verifyTransaction(transactionRootHex: string, txId: string, leafHex: string, stepsJson: string): string;
+  confirmTransaction(chainId: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
   decodeEvent(leafHex: string): string;
   sessionOpen(addressBook: string): string;
   sessionClose(id: string): string;
@@ -262,8 +267,14 @@ export class QCoreAuthenticationRequired extends Error {
   readonly code = 'QCORE_AUTHENTICATION_REQUIRED';
 }
 
+export class QCoreAuthenticationCancelled extends Error {
+  readonly code = 'QCORE_AUTHENTICATION_CANCELLED';
+}
+
 function nativeError(message: string): Error {
-  return message.startsWith('authentication required') ? new QCoreAuthenticationRequired(message) : new Error(message);
+  if (message.startsWith('authentication required')) return new QCoreAuthenticationRequired(message);
+  if (message.startsWith('authentication cancelled')) return new QCoreAuthenticationCancelled(message);
+  return new Error(message);
 }
 
 function throwingOnFailure(module: QcoreNative): QcoreNative {
@@ -468,18 +479,30 @@ export const nativeQCore: QCore = {
   verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): boolean {
     return verdict(native.verifyEvent(eventRootHex, leafHex, stepsJson));
   },
+  verifyTransaction(transactionRootHex: string, txId: string, leafHex: string, stepsJson: string): boolean {
+    return verdict(native.verifyTransaction(transactionRootHex, txId, leafHex, stepsJson));
+  },
+  confirmTransaction(chainId: bigint, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string {
+    return native.confirmTransaction(u64(chainId), txId, proofJson, finalityJson, rosterJson);
+  },
   decodeEvent(leafHex: string): string {
     return native.decodeEvent(leafHex);
   },
 };
 
+export interface RevealPrompt {
+  title?: string;
+  subtitle?: string;
+}
+
 export interface SecureQCore {
   createSeed(alias: string): void;
   importPhrase(alias: string, phrase: Uint8Array): void;
   importSeed(alias: string, seed: Uint8Array): void;
-  revealPhrase(alias: string): Uint8Array;
+  revealPhrase(alias: string, prompt?: RevealPrompt): Promise<Uint8Array>;
   hasSeed(alias: string): boolean;
   closeSeed(alias: string): void;
+  closeAll(): void;
   forgetSeed(alias: string): void;
   address(alias: string, index: bigint): string;
   signTransfer(
@@ -607,14 +630,20 @@ export const secureQCore: SecureQCore = {
   importSeed(alias: string, seed: Uint8Array): void {
     native.vaultImportSeed(alias, toBase64(seed));
   },
-  revealPhrase(alias: string): Uint8Array {
-    return fromBase64(native.vaultRevealPhrase(alias));
+  async revealPhrase(alias: string, prompt: RevealPrompt = {}): Promise<Uint8Array> {
+    const text = await native.vaultRevealPhrase(alias, prompt.title ?? '', prompt.subtitle ?? '');
+    if (typeof text !== 'string') throw new Error('the native layer returned no phrase');
+    if (text.startsWith(FAILURE_PREFIX)) throw nativeError(text.slice(FAILURE_PREFIX.length));
+    return fromBase64(text);
   },
   hasSeed(alias: string): boolean {
     return native.vaultHas(alias) === 'true';
   },
   closeSeed(alias: string): void {
     native.vaultClose(alias);
+  },
+  closeAll(): void {
+    native.vaultCloseAll();
   },
   forgetSeed(alias: string): void {
     native.vaultForget(alias);
@@ -841,6 +870,67 @@ export function verifyFinality(
 export function verifyEvent(eventRootHex: string, leafHex: string, steps: readonly ProofStep[]): boolean {
   const path = steps.map((s) => ({ sibling: s.sibling, left: s.left }));
   return verdict(native.verifyEvent(eventRootHex, leafHex, JSON.stringify(path)));
+}
+
+export function verifyTransaction(
+  transactionRootHex: string,
+  txId: string,
+  leafHex: string,
+  steps: readonly ProofStep[],
+): boolean {
+  const path = steps.map((s) => ({ sibling: s.sibling, left: s.left }));
+  return verdict(native.verifyTransaction(transactionRootHex, txId, leafHex, JSON.stringify(path)));
+}
+
+export interface TransactionProof {
+  height: number;
+  index: number;
+  leaf: string;
+  steps: readonly ProofStep[];
+}
+
+export interface FinalityAnswer {
+  header_bytes: string;
+  certificate: string;
+}
+
+export interface ConfirmedTransaction {
+  txId: string;
+  height: bigint;
+  index: bigint;
+  header: FinalizedHeader;
+}
+
+export function confirmTransaction(
+  chainId: bigint,
+  txId: string,
+  proof: TransactionProof | string,
+  finality: FinalityAnswer | string,
+  roster: readonly RosterMember[] | string,
+): ConfirmedTransaction {
+  if (typeof txId !== 'string') throw new Error('the transaction id must be a string');
+  const proofJson =
+    typeof proof === 'string'
+      ? proof
+      : JSON.stringify({
+          height: proof.height,
+          index: proof.index,
+          leaf: proof.leaf,
+          steps: proof.steps.map((s) => ({ sibling: s.sibling, left: s.left })),
+        });
+  const finalityJson =
+    typeof finality === 'string'
+      ? finality
+      : JSON.stringify({ header_bytes: finality.header_bytes, certificate: finality.certificate });
+  const rosterJson =
+    typeof roster === 'string'
+      ? roster
+      : JSON.stringify(roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk })));
+  const confirmed = JSON.parse(
+    native.confirmTransaction(u64(chainId), txId, proofJson, finalityJson, rosterJson),
+  ) as { tx_id: string; height: string; index: string; header: FinalizedHeader };
+  if (confirmed.tx_id !== txId) throw new Error('the native layer confirmed a different transaction');
+  return { txId: confirmed.tx_id, height: BigInt(confirmed.height), index: BigInt(confirmed.index), header: confirmed.header };
 }
 
 export function decodeEvent(leafHex: string): ChainEvent {
