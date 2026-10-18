@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use qcore::json::{from_hex, object, to_hex, Json};
@@ -353,8 +354,8 @@ pub fn sign_register(
 }
 
 #[uniffi::export]
-pub fn chain_id_from_name(name: String) -> u64 {
-    qcore::chain_id_from_name(&name)
+pub fn chain_id_from_name(name: String) -> Result<u64, QcoreError> {
+    qcore::checked_chain_id(&name).map_err(err)
 }
 
 fn parse_key32(hex: &str) -> Result<[u8; 32], QcoreError> {
@@ -757,6 +758,7 @@ impl SeedHandle {
     #[allow(clippy::too_many_arguments)]
     pub fn sign_transfer(
         &self,
+        session: Arc<SigningSession>,
         index: u64,
         to: String,
         amount: String,
@@ -768,22 +770,25 @@ impl SeedHandle {
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
-            transfer_with(
-                seed,
-                index,
-                &to,
-                &amount,
-                nonce,
-                &fee,
-                chain_id,
-                valid_until,
-            )
+            session.signing(&qcore::account_address(seed, index), nonce, || {
+                transfer_with(
+                    seed,
+                    index,
+                    &to,
+                    &amount,
+                    nonce,
+                    &fee,
+                    chain_id,
+                    valid_until,
+                )
+            })
         })
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn sign_call(
         &self,
+        session: Arc<SigningSession>,
         index: u64,
         target: String,
         args_hex: String,
@@ -797,24 +802,27 @@ impl SeedHandle {
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
-            call_with(
-                seed,
-                index,
-                &target,
-                &args_hex,
-                nonce,
-                meter_limit,
-                &fee,
-                chain_id,
-                valid_until,
-                &transfer_fee,
-            )
+            session.signing(&qcore::account_address(seed, index), nonce, || {
+                call_with(
+                    seed,
+                    index,
+                    &target,
+                    &args_hex,
+                    nonce,
+                    meter_limit,
+                    &fee,
+                    chain_id,
+                    valid_until,
+                    &transfer_fee,
+                )
+            })
         })
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn sign_register(
         &self,
+        session: Arc<SigningSession>,
         index: u64,
         nonce: u64,
         fee: String,
@@ -823,12 +831,17 @@ impl SeedHandle {
         head: u64,
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
-        self.with_seed(|seed| register_with(seed, index, nonce, &fee, chain_id, valid_until))
+        self.with_seed(|seed| {
+            session.signing(&qcore::account_address(seed, index), nonce, || {
+                register_with(seed, index, nonce, &fee, chain_id, valid_until)
+            })
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn sign_payable_call(
         &self,
+        session: Arc<SigningSession>,
         index: u64,
         target: String,
         args_hex: String,
@@ -843,25 +856,28 @@ impl SeedHandle {
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
-            payable_call_with(
-                seed,
-                index,
-                &target,
-                &args_hex,
-                nonce,
-                meter_limit,
-                &fee,
-                &value,
-                chain_id,
-                valid_until,
-                &transfer_fee,
-            )
+            session.signing(&qcore::account_address(seed, index), nonce, || {
+                payable_call_with(
+                    seed,
+                    index,
+                    &target,
+                    &args_hex,
+                    nonce,
+                    meter_limit,
+                    &fee,
+                    &value,
+                    chain_id,
+                    valid_until,
+                    &transfer_fee,
+                )
+            })
         })
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn sign_asset_call(
         &self,
+        session: Arc<SigningSession>,
         index: u64,
         target: String,
         args_hex: String,
@@ -877,56 +893,198 @@ impl SeedHandle {
     ) -> Result<String, QcoreError> {
         check_valid_until(valid_until, head)?;
         self.with_seed(|seed| {
-            asset_call_with(
-                seed,
-                index,
-                &target,
-                &args_hex,
-                &asset_issuer,
-                &amount,
-                nonce,
-                meter_limit,
-                &fee,
-                chain_id,
-                valid_until,
-                &transfer_fee,
-            )
+            session.signing(&qcore::account_address(seed, index), nonce, || {
+                asset_call_with(
+                    seed,
+                    index,
+                    &target,
+                    &args_hex,
+                    &asset_issuer,
+                    &amount,
+                    nonce,
+                    meter_limit,
+                    &fee,
+                    chain_id,
+                    valid_until,
+                    &transfer_fee,
+                )
+            })
         })
+    }
+}
+
+const SAVED_STATE_MAX: usize = 1 << 20;
+
+#[derive(uniffi::Record)]
+pub struct SavedNonces {
+    pub key: String,
+    pub state: String,
+}
+
+#[derive(Default)]
+struct Ledger {
+    core: qcore::SigningSession,
+    reserved: BTreeMap<String, BTreeSet<u64>>,
+    dirty: BTreeSet<String>,
+}
+
+fn held_slot(entry: &Json) -> Option<u64> {
+    entry
+        .get("slot")
+        .and_then(Json::as_str)
+        .filter(|text| digits(text))
+        .and_then(|text| text.parse::<u64>().ok())
+}
+
+impl Ledger {
+    fn slot(
+        &mut self,
+        key: &str,
+        reported: u64,
+        expected: Option<u64>,
+        order: bool,
+    ) -> Result<u64, String> {
+        self.dirty.insert(key.to_string());
+        let out = self.core.slot(key, reported, expected, order);
+        if out.is_ok() {
+            self.reserved
+                .entry(key.to_string())
+                .or_default()
+                .insert(reported);
+        }
+        out
+    }
+
+    fn signed(&mut self, key: &str, slot: u64) {
+        self.dirty.insert(key.to_string());
+        self.core.signed(key, slot);
+        if let Some(reserved) = self.reserved.get_mut(key) {
+            reserved.remove(&slot);
+        }
+    }
+
+    fn release(&mut self, key: &str, slot: u64) {
+        self.dirty.insert(key.to_string());
+        self.core.release(key, slot);
+        if let Some(reserved) = self.reserved.get_mut(key) {
+            reserved.remove(&slot);
+        }
+    }
+
+    fn release_pending(&mut self, key: &str) {
+        self.dirty.insert(key.to_string());
+        self.core.release_pending(key);
+        self.reserved.remove(key);
+    }
+
+    fn outcome(&mut self, key: &str, slot: u64, accepted: bool) {
+        self.dirty.insert(key.to_string());
+        self.core.outcome(key, slot, accepted);
+    }
+
+    fn saved(&self) -> Result<Vec<SavedNonces>, QcoreError> {
+        let exported = qcore::json::parse(&self.core.export_state()).map_err(err)?;
+        let entries = exported
+            .get("keys")
+            .and_then(Json::as_array)
+            .ok_or_else(|| err("the client core exported a session without keys"))?;
+        let mut out = Vec::with_capacity(self.dirty.len());
+        for key in &self.dirty {
+            let found = entries
+                .iter()
+                .find(|entry| entry.get("key").and_then(Json::as_str) == Some(key.as_str()));
+            let mut held: Vec<Json> = found
+                .and_then(|entry| entry.get("held"))
+                .and_then(Json::as_array)
+                .map(<[Json]>::to_vec)
+                .unwrap_or_default();
+            let signed: BTreeSet<u64> = held.iter().filter_map(held_slot).collect();
+            for slot in self.reserved.get(key).into_iter().flatten() {
+                if !signed.contains(slot) {
+                    held.push(object(vec![
+                        ("slot", Json::str(slot.to_string())),
+                        ("accepted", Json::Bool(false)),
+                    ]));
+                }
+            }
+            let mut fields = vec![("key", Json::str(key.clone())), ("held", Json::Array(held))];
+            if let Some(next) = found.and_then(|entry| entry.get("next")) {
+                fields.push(("next", next.clone()));
+            }
+            let state = object(vec![
+                ("version", Json::Int(1)),
+                ("keys", Json::Array(vec![object(fields)])),
+            ])
+            .render();
+            out.push(SavedNonces {
+                key: key.clone(),
+                state,
+            });
+        }
+        Ok(out)
     }
 }
 
 #[derive(uniffi::Object)]
 pub struct SigningSession {
-    inner: Mutex<qcore::SigningSession>,
+    inner: Mutex<Ledger>,
+}
+
+impl SigningSession {
+    fn holding(core: qcore::SigningSession) -> Arc<Self> {
+        Arc::new(SigningSession {
+            inner: Mutex::new(Ledger {
+                core,
+                ..Ledger::default()
+            }),
+        })
+    }
+
+    fn signing(
+        &self,
+        key: &str,
+        nonce: u64,
+        sign: impl FnOnce() -> Result<String, QcoreError>,
+    ) -> Result<String, QcoreError> {
+        let mut ledger = lock(&self.inner);
+        let reserved = ledger
+            .reserved
+            .get(key)
+            .is_some_and(|reserved| reserved.contains(&nonce));
+        if !reserved {
+            return Err(err(format!(
+                "the vault signs only at a nonce taken from this signing session, nonce {nonce} of {key} was not reserved with slot or was already signed"
+            )));
+        }
+        let signed = sign()?;
+        ledger.signed(key, nonce);
+        Ok(signed)
+    }
 }
 
 #[uniffi::export]
 impl SigningSession {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
-        Arc::new(SigningSession {
-            inner: Mutex::new(qcore::SigningSession::new()),
-        })
+        Self::holding(qcore::SigningSession::new())
     }
 
     #[uniffi::constructor]
     pub fn with_address_book(book: Vec<String>) -> Result<Arc<Self>, QcoreError> {
-        let inner = qcore::SigningSession::with_address_book(&book).map_err(err)?;
-        Ok(Arc::new(SigningSession {
-            inner: Mutex::new(inner),
-        }))
+        let core = qcore::SigningSession::with_address_book(&book).map_err(err)?;
+        Ok(Self::holding(core))
     }
 
     pub fn known(&self) -> Vec<String> {
-        lock(&self.inner).known()
+        lock(&self.inner).core.known()
     }
 
     pub fn remember_address(&self, address: String) {
-        lock(&self.inner).remember_address(&address)
+        lock(&self.inner).core.remember_address(&address)
     }
 
     pub fn check_target(&self, address: String) -> Result<(), QcoreError> {
-        lock(&self.inner).check_target(&address).map_err(err)
+        lock(&self.inner).core.check_target(&address).map_err(err)
     }
 
     pub fn slot(
@@ -958,11 +1116,22 @@ impl SigningSession {
     }
 
     pub fn next_nonce(&self, key: String) -> Option<u64> {
-        lock(&self.inner).next_nonce(&key)
+        lock(&self.inner).core.next_nonce(&key)
     }
 
     pub fn is_held(&self, key: String, slot: u64) -> bool {
-        lock(&self.inner).is_held(&key, slot)
+        lock(&self.inner).core.is_held(&key, slot)
+    }
+
+    pub fn saved_accounts(&self) -> Result<Vec<SavedNonces>, QcoreError> {
+        lock(&self.inner).saved()
+    }
+
+    pub fn restore(&self, state: String) -> Result<(), QcoreError> {
+        if state.len() > SAVED_STATE_MAX {
+            return Err(err("the saved nonce state is too large"));
+        }
+        lock(&self.inner).core.import_state(&state).map_err(err)
     }
 }
 
@@ -976,6 +1145,13 @@ mod tests {
 
     fn handle() -> Arc<SeedHandle> {
         SeedHandle::from_seed_bytes(seed()).expect("a thirty two byte seed is held")
+    }
+
+    fn slotted(index: u64, nonce: u64) -> Arc<SigningSession> {
+        let session = SigningSession::new();
+        let key = address(seed(), index).expect("derives");
+        assert_eq!(session.slot(key, nonce, None, false).expect("free"), nonce);
+        session
     }
 
     #[test]
@@ -1248,6 +1424,7 @@ mod tests {
         .expect("the seed path signs");
         let by_handle = handle()
             .sign_transfer(
+                slotted(0, 0),
                 0,
                 to.clone(),
                 "5".to_string(),
@@ -1260,7 +1437,7 @@ mod tests {
             .expect("the handle signs");
         assert_eq!(by_seed, by_handle, "both paths must sign the same bytes");
         let register = handle()
-            .sign_register(0, 0, "1".to_string(), 1, 300, 10)
+            .sign_register(slotted(0, 0), 0, 0, "1".to_string(), 1, 300, 10)
             .expect("the handle registers");
         assert_eq!(
             register,
@@ -1268,6 +1445,7 @@ mod tests {
         );
         let call = handle()
             .sign_call(
+                slotted(0, 0),
                 0,
                 to.clone(),
                 String::new(),
@@ -1309,7 +1487,17 @@ mod tests {
         assert!(held.seed_bytes().is_err());
         assert!(held.phrase_bytes().is_err());
         let refused = held
-            .sign_transfer(0, to, "5".to_string(), 0, "1".to_string(), 1, 300, 10)
+            .sign_transfer(
+                slotted(0, 0),
+                0,
+                to,
+                "5".to_string(),
+                0,
+                "1".to_string(),
+                1,
+                300,
+                10,
+            )
             .unwrap_err()
             .to_string();
         assert!(refused.contains("forgotten"), "{refused}");
@@ -1323,6 +1511,7 @@ mod tests {
         let to = address(seed(), 1).expect("derives");
         let sign = |valid_until: u64, head: u64| {
             held.sign_transfer(
+                slotted(0, 0),
                 0,
                 to.clone(),
                 "5".to_string(),
@@ -1348,7 +1537,7 @@ mod tests {
         assert!(sign(1_000 + max_validity_blocks(), 1_000).is_ok());
         assert!(sign(1_000 + default_validity_blocks(), 1_000).is_ok());
         assert!(held
-            .sign_register(0, 0, "1".to_string(), 1, 5_000, 10)
+            .sign_register(slotted(0, 0), 0, 0, "1".to_string(), 1, 5_000, 10)
             .is_err());
     }
 
@@ -1458,6 +1647,254 @@ mod tests {
         assert_eq!(session.known(), vec![first.clone(), second.clone()]);
         assert!(session.check_target(first).is_ok());
         assert!(session.check_target(second).is_ok());
+    }
+
+    fn vault_transfer(
+        held: &SeedHandle,
+        session: &Arc<SigningSession>,
+        index: u64,
+        nonce: u64,
+    ) -> Result<String, QcoreError> {
+        let to = address(seed(), 9).expect("derives");
+        held.sign_transfer(
+            session.clone(),
+            index,
+            to,
+            "5".to_string(),
+            nonce,
+            "1".to_string(),
+            1,
+            300,
+            10,
+        )
+    }
+
+    #[test]
+    fn the_vault_signs_only_at_a_nonce_taken_from_the_session() {
+        let held = handle();
+        let me = address(seed(), 0).expect("derives");
+        let other = address(seed(), 1).expect("derives");
+        let to = address(seed(), 9).expect("derives");
+        let session = SigningSession::new();
+        let refused = vault_transfer(&held, &session, 0, 5)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("taken from this signing session"),
+            "{refused}"
+        );
+        assert!(
+            held.sign_call(
+                session.clone(),
+                0,
+                to.clone(),
+                String::new(),
+                5,
+                21_000,
+                "9000".to_string(),
+                1,
+                300,
+                "500".to_string(),
+                10
+            )
+            .is_err(),
+            "a call without a slot is refused"
+        );
+        assert!(held
+            .sign_register(session.clone(), 0, 5, "1".to_string(), 1, 300, 10)
+            .is_err());
+        assert!(held
+            .sign_payable_call(
+                session.clone(),
+                0,
+                to.clone(),
+                String::new(),
+                5,
+                21_000,
+                "9000".to_string(),
+                "7".to_string(),
+                1,
+                300,
+                "500".to_string(),
+                10
+            )
+            .is_err());
+        assert!(held
+            .sign_asset_call(
+                session.clone(),
+                0,
+                to.clone(),
+                String::new(),
+                to.clone(),
+                "7".to_string(),
+                5,
+                21_000,
+                "9000".to_string(),
+                1,
+                300,
+                "500".to_string(),
+                10
+            )
+            .is_err());
+        session.slot(other.clone(), 5, None, false).expect("free");
+        assert!(
+            vault_transfer(&held, &session, 0, 5).is_err(),
+            "a slot of another account does not sign for this one"
+        );
+        session.slot(me.clone(), 5, None, false).expect("free");
+        let first = vault_transfer(&held, &session, 0, 5).expect("signs at its slot");
+        assert!(session.is_held(me.clone(), 5));
+        assert!(
+            vault_transfer(&held, &session, 0, 5).is_err(),
+            "a slot carries one signature"
+        );
+        assert!(session.slot(me.clone(), 6, None, false).is_err());
+        session
+            .slot(me.clone(), 5, Some(5), false)
+            .expect("asked for again");
+        session.release(me.clone(), 5);
+        assert!(
+            vault_transfer(&held, &session, 0, 5).is_err(),
+            "a released slot does not sign"
+        );
+        session
+            .slot(me.clone(), 5, Some(5), false)
+            .expect("asked for again");
+        let again = vault_transfer(&held, &session, 0, 5).expect("signs");
+        assert_eq!(
+            first, again,
+            "the vault and the session sign the same transaction"
+        );
+    }
+
+    fn restarted(saved: Vec<SavedNonces>) -> Arc<SigningSession> {
+        let after = SigningSession::new();
+        for account in saved {
+            after.restore(account.state).expect("restores");
+        }
+        after
+    }
+
+    #[test]
+    fn a_restart_restores_the_held_reserved_and_next_nonces() {
+        let held = handle();
+        let me = address(seed(), 0).expect("derives");
+        let other = address(seed(), 1).expect("derives");
+        let before = SigningSession::new();
+        before.slot(me.clone(), 5, None, false).expect("free");
+        vault_transfer(&held, &before, 0, 5).expect("signs");
+        before.slot(other.clone(), 3, None, false).expect("free");
+        let saved = before.saved_accounts().expect("saves");
+        let keys: Vec<&str> = saved.iter().map(|s| s.key.as_str()).collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&me.as_str()) && keys.contains(&other.as_str()));
+        for account in &saved {
+            let doc = qcore::json::parse(&account.state).expect("json");
+            assert_eq!(doc.get("version").and_then(Json::as_u64), Some(1));
+            let entries = doc.get("keys").and_then(Json::as_array).expect("keys");
+            assert_eq!(entries.len(), 1, "each account is saved on its own");
+            assert_eq!(
+                entries[0].get("key").and_then(Json::as_str),
+                Some(account.key.as_str())
+            );
+        }
+
+        let after = restarted(saved);
+        assert!(after.is_held(me.clone(), 5));
+        assert_eq!(after.next_nonce(me.clone()), Some(5));
+        assert!(
+            after.slot(me.clone(), 6, None, false).is_err(),
+            "the retry waits until the signed nonce is known to have landed"
+        );
+        assert!(after.slot(me.clone(), 5, None, false).is_err());
+        assert!(
+            after.is_held(other.clone(), 3),
+            "a slot reserved when the app stopped may have been signed, so it comes back held"
+        );
+        assert!(after.slot(other.clone(), 4, None, false).is_err());
+        assert_eq!(
+            after
+                .slot(me.clone(), 6, Some(6), false)
+                .expect("asked for"),
+            6
+        );
+
+        before.outcome(me.clone(), 5, true);
+        let later = restarted(before.saved_accounts().expect("saves"));
+        assert_eq!(later.next_nonce(me.clone()), Some(6));
+        assert_eq!(later.slot(me.clone(), 6, None, false).expect("next"), 6);
+
+        let untouched = SigningSession::new();
+        assert!(untouched.saved_accounts().expect("saves").is_empty());
+        let restored_only = restarted(before.saved_accounts().expect("saves"));
+        assert!(
+            restored_only.saved_accounts().expect("saves").is_empty(),
+            "an account is saved again only once this session changes it"
+        );
+
+        for bad in [
+            "not json",
+            "{}",
+            r#"{"version":2,"keys":[]}"#,
+            r#"{"version":1,"keys":[{"key":"a","next":"x","held":[]}]}"#,
+            r#"{"version":1,"keys":[{"held":[]}]}"#,
+        ] {
+            assert!(
+                SigningSession::new().restore(bad.to_string()).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(SigningSession::new()
+            .restore("x".repeat(SAVED_STATE_MAX + 1))
+            .is_err());
+    }
+
+    #[test]
+    fn a_fresh_session_needs_the_expected_order_nonce() {
+        let key = "order key".to_string();
+        let fresh = SigningSession::new();
+        let refused = fresh
+            .slot(key.clone(), 9, None, true)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("expected order nonce"), "{refused}");
+        assert_eq!(
+            fresh
+                .slot(key.clone(), 9, Some(9), true)
+                .expect("asked for"),
+            9
+        );
+        fresh.signed(key.clone(), 9);
+        fresh.outcome(key.clone(), 9, true);
+        assert_eq!(
+            fresh.slot(key.clone(), 10, None, true).expect("tracked"),
+            10
+        );
+        fresh.release(key.clone(), 10);
+        assert!(
+            fresh.slot(key.clone(), 12, None, true).is_err(),
+            "a jump above the tracked order nonce is refused"
+        );
+        let restored = restarted(fresh.saved_accounts().expect("saves"));
+        assert_eq!(
+            restored.slot(key.clone(), 10, None, true).expect("tracked"),
+            10
+        );
+        assert!(restored.slot(key, 12, None, true).is_err());
+    }
+
+    #[test]
+    fn the_retired_testnet_name_derives_no_chain_id() {
+        assert_eq!(
+            chain_id_from_name(qcore::TESTNET_CHAIN_NAME.to_string()).expect("derives"),
+            6_995_079_887_857_407_393
+        );
+        assert_eq!(qcore::TESTNET_CHAIN_NAME, "Q-test-net-01");
+        let refused = chain_id_from_name("Q-test-net-1".to_string())
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("retired"), "{refused}");
+        assert!(chain_id_from_name(String::new()).is_err());
     }
 
     #[test]
@@ -1608,7 +2045,7 @@ mod tests {
     const TX_ZERO: &str = "QTX17Y0MDLEDF8VUXNE6M9GXMAMDLPW8G7MKN2VFX3FFFFWPE8SMKJ4Q5E0U6V";
     const TX_ONE: &str = "QTX15JX99J6YWMM6JSSPT63FW8Y3CH933N9L7AHKQAAGCCWJQ933DL8SY8Y32R";
     const TX_HEADER: &str = "921000000000000041414141414141414141414141414141414141414141414141414141414141415151515151515151515151515151515151515151515151515151515151515151c1a8b465e606c9ed2e7eb3c61116a18c8da50f1adbb463b1ae05c51c88386bfc525252525252525252525252525252525252525252525252525252525252525253535353535353535353535353535353535353535353535353535353535353530b0000000000000076616c696461746f722d3100d2496b000000000000000000000000";
-    const TX_CERTIFICATE: &str = "9210000000000000070000000000000092100000000000001113e96cbc9508de1f4c59b354f5bb27ab33b9329966c8263cad99fdfa05d50e01414141414141414141414141414141414141414141414141414141414141414101000000000000002000000000000000a8321c56c45cfb11d47de6b26080cc8f69f26d48f0c966bb9f031d075da393dc01010000000000000001000000000000009210000000000000070000000000000000000000000000002000000000000000a8321c56c45cfb11d47de6b26080cc8f69f26d48f0c966bb9f031d075da393dc92100000000000001113e96cbc9508de1f4c59b354f5bb27ab33b9329966c8263cad99fdfa05d50e0141414141414141414141414141414141414141414141414141414141414141410100000000000000070000000000000020000000000000009842a14dc146fb3541d7bb1469fc42bf86ca68d75d2ef4a6e269a799c7c8e99d060000000000000020000000000000006d77f830b6e2adb75a4106e4a266ddf80286b6127f8e3e3b8f33e3443c2c5eef20000000000000000fe8669a66d0e3bfd721aaee57cdce85d50569a7820e626d117e9af58de966d520000000000000002b2cb8faf6677ba79cf282d339ada1386c72b0fa22e3d8cace8df31477af3b8a200000000000000034157bb0bffd7742e9648763e8355803d6d1c97391a4c6d091b3d35f02b09f3d2000000000000000662eea4e083f8a459629963ac5c9b0db3a0e669b95560cd7056edf1344258cf62000000000000000a82a766ff5641a1ba69904b32967f628506b860d05e529d80f3829f4789c6e94ed0c000000000000675b3628d137d7eeec745c75bf10d89562b7bff05660b1faed818336bf220422f1499234587401cab4eb1e84dc45e2a6a5bd602a2ae4026aebf35a606d4e02b66c871ff50f8e6f6bfd0d18793fb53bfc7dabc94ebd598a0b93144f3f37b5e75cb0f5bce514c14719b92fd6a5f83d65b9be564718657d3fe3563b1803d92b2a840714917115e4eb480eb6f6f5a2493d0320a3ef16a62ef61e8f046475ee64424a70949abd05dc6547f0d10e2be3c5409e51cf33f359deb5c8724d00c9d5cb6cd7682e126ab53f108e43663c199ec083b24a9b3158d32aca1a4865ac8cd03b2025ff59383f0e308127d6d8755108c693f5a548adc15858e99b8382c8801a57551900a4a96f194224e52405b09c5c7537377e1c3071ccdb444f650845ec69e77a52e38554d8844c8d1865f68332d5cd203300ada5748fa81d4b2034278674961bdf3d24fef9d70944258ac4135b8b467c4e380c38b3aa7ef66f29b1b969d21cfc569328ddfaf465d14e230542f18ba54d7db64f58d5e332cb0fb8d1e7e1c4bd939f345f4f9efc7a4688616ee487f629f78f5deed0fb4ada7887cb7df9f997f56d46131980494c1d49abd63d651e7eb3ff6d84626206f093e39645af85e68afbaa7298b5b298d8c3514d35159ebdaf2af59b3aad3aa7ca00a7ea0d75517d6056267c6db380d4b575f3d410a02c5c5eadf5949bb98c305338b818c920ce830d52665c940aa967255db6d96141b88a64a8fa66a97af44956eadbe60fff1bc7abdcbb40e1892212f4244ea27dec3e435d4f22bdc3ad25598b8fdaff061c16de0dd031af322f43d227941fd25c46dbe71d73bb18d22648de4d1f00f628c78645733f39ed39cd056482abf54db19b04773e3dc8667887f36eaf28a85c75a825a17f3a7902d60c90aea642190b2e627a1bd10cb99a7534b954078967b8fb7079a73696b8290d5382047ac08dbfa1036011a211601902e26ceb51992294b6bb97576613b1fed4c994b217314c633c2b3d7d175d93325ad00099c20f288a36a169b0650a63bb5befb72a826f1be416c573576528694cdcc98f32a8f422783e1d27cb159c47d0d653fb4c1b991b66aa859afdaead038872663ee66ea9f4951badd7ba9f1c216f28a630245fcd74729ee9acc5deaab6d0f21affda70c3c51a3769302beda2e1dfd7b3eddfd2f3ff1f7577285644054a858a2a0def67067e9dbc1e31c16cdaa171a98577378f546863c6cb7de9ce21087aa97202ac6f9327e36d729ac132357f2b49beb66a92056b9f5a0c0d26ce62968d21e54cea664b46cbdaa10d29c0fb6add5d556d1d0d7a9f18c8952120ee5c4c3b5e1aaf1064388fbd8bffe9d4571658589a06e146b23b40f5ef6bd57322ec64286ad92af9a44c40df80f82fc32685bc06f944e91791de38b3d11e1f7b29d4763502592650debf3155cb5746782a7b4f8f5fe8a3c03b07c68e8854e6e3e1a526c4ab7b4ff8fca5a794c352671e59b66084c8c3a801cf9de86711057bf7c0ea2fe41817f62b1f47e0ae64539ac17acdf06b279bdee9e382fed69ebe0d073e3749f3d42eef582fb4b0eb68ff72f381be0b89a376be2697f008f51917df1397e8b9a3eb1663d1d03a4fa0cfe950f8851139ab9858a4ae7038e979da028508bd68723d7ccaece33e7aaf813e842d3c1bc73355da29dd1bdc60288280a33747a9d53eca168030c4f6c84a56e6f6fb8c0f4eefe803714bc542a0af1ef4cb653a93da45ab7f53fe978fbc3bf5fae204da1a881a0b3785cfa0abe86a391c721acf0c82a452ffd195d40fb822b390d784888dafe6652720595a0708fcbcc17d22663d600d83676b13babcc3d62b25245fbb8467e637e52c7df468968874ca727366eed7cdaa506fe0e15bad51068f5a1be73f3bcda3cc78fd23ca0124f0310431b510742d444d7c9e6a5cfeba5273caa6006e03144cfd1b8ab7a29cd9970faee4a6805cfc3c761d396dd78770f4c5888aa0404ab992fc866108943607b3970fe42097d8f379fb8b053172d17a5359f779e3c44a97e4aab30672943de46a4fc7d86ddc1ff7d187dbecc80bbea1578462e4b913624e53739f5cee4fff1c0447b7cd2ad71a2145ca87d24673e2f63a22cb4245d84244ed2d910b8295b29285a5480f0d4f03d2fdd1a3307aceb80847e261b653bf0f2c7df5d723c1fdfb9f95d4237bb93ab7eab196b03ac872a7c75ee2d90550efd90a96c34348a6158a1e3f919ae5c867e71ee3aba66bd132e67ce8a34387aa0c341e2c5342d5a000bc281866bc4ed9622b30161cb2454d83e8d3d3661628c782fd1be9f6ca78da0af455d130196c7fdfd95301f5f7ac738f8361f6eca98e44661e7921d52b53f7e4eaa05b8bf19c6c3a2bdb0ac4df84da7c886c03553ddd038b679b4e0284d8fb1a1b2cf803662418c4003f5ba2ca2f131ac82e7d988e362025fe17ef1cfecb94d9f1ba76ec359056b7fa1c1353ea3933b69ab92741723da418025a8e19c1cc0bdfad178e9e2a5b309b6bfdb9d823b53781e0a6e119ceacd2049ee53b71cf8e4b3362c9e5e19c8bb188817e6db581a1ccc86073d48660f622e00d28a60fbe2f0c8a5983f98a313159e6fc7d85d39fcdeb5d60446253039767fc5df20d29e0dfff06d36f5c9bb5fe2d400504d39d3f2cdb27746aecc8a34b581637cfa416bb95250e087673751540f1f251c7bca27e08daaa934f4cfabcd33afe40bf67cdfe54b3484b81cde7fd77c9bb064b0ea3966f4504b19b8f499c27120c2344e90f10486721e89f1c965f0abda06cd394998ea60ecbf79137c27ebb9eb9df2349349758dc6b0401d6dbee13fe10b0492ea9e9b7f7dc1573066fe40617cda2b57df39629bcac62dc60ce60e697f4c4d2bbe76a45c9c0028170b8b78c43ee7376131b449c2d2787c2799dc87f19e3e76f94cf2fd66ed2f92f12fb331efb43674e26aaed192d3dc20b340f59b372814d669e4eb0424d6e6f4af51bf120a545d8907c5309d0b228ba42bc716e7447f90964d95c2cf099819da9e97baa44802fab702474d3d9d91bb2334d1f31d56661b5b52cdfdd9ce4b8550305e8e7facd1a66e7d8033ee40329cf46568728f43c29770ca892f942657f5b3e2bffc2e6b4561225fd1234be2f992bbb76cad66c72941e3b2ce193031123ad33fe09d64f2a65d211d221cfa4edf1ec2c2c3cf0752d6dd363be114113ea774e1cb9ef0f90e7e2a8a609eb71d15118f62da70639800152f645aefd636e74814434eda50958eab724c294d94d18649a5c42b9ddc1f8572ce786af0ce9c38a0d31ff7013092c8eced7f2d69eb86da5335fea682676f4c95abed7a1243e162e64a5d0df0c8528aee9bf4c76f8a487c0b0819da9d9fc0ccf8d090e1d01539665d3d562b08489e86fd90bec53ee1a93563bb7c96ad0aac0132a6cc27d9964cbb78676ae19193f6a5db6639b7acb26875ab25d9b5f71ce1270321ae20154f911f80a5dacdc4e1c7e2b0b663dc12110e0f026e952c251b6f8e85cd5028efebcdf2fce8506a50c406bc65b283905ccb0c9d77d1ed495202809c4287619e020cdac0f050db00758c085523dc2a92c8e6c117d9f87d738ff140e8a8767514cdcdfeef635584fc7aff881d4ac4276e7c8aaae0c2de3f35d0f30804ea33cf236cdb0428e6ac086cf7a7fca56d1aa34514cb9250a47bc81d0532d45a768a84218892707f122e44084e9404f5a7f29e4b78744090bce865cf9afb54bc4b7bc4452e990a0bd53030ed24a8336bb477adc02d6004959709b7af1a5bc43d45be18290d5ebf9a1d602487ab6d4791c58139a6ce6a9298ac2a7454542a398913e82008c1cbad198ed3a14c7127a58ee8add709c0cd0c573c4d70980956e6a1d79a855a36227bc6db839501d458754efc1a73da014c648d38b9e4408db95aa99807239a45d983626e4ff6458470210bb974494ccf59b505fcf619222b8307b3c50b9cbbf514224e3ea8d2358e7f3bb4116886cd06f64062d3cb0d1cef9e504551dad62a7033a73870553c1cc4e7d5d18a159c2edbcab3dc00a37b54fa72e72bd9dbabcc8d4b0acefed27d8334d8607e1664808875f5f68500fea63f0a65bc72e9b3f692b420569b82c93167b96a9e09649462fe89a1945ee9a330a0ad4f526bdb065734a1e9d7bdb964a34ce7bdda995ce5d798c32aed212859232c3cf776f5962b2b6d08f857194ecb9dbc89a3390ee9460b859caf4c141ad671d788d70b9a9038cf9afbc86e9146b400b00555817245f73fb1390c25c8b5ca348ffdafac0096e820b7ab9141f604bcc6ea2fd993dfb6c97bc3aedb8a72ee62a70c92168faf0341728a8994bd2756f2fae31d479b9557c8554539a420153c18c56ff072014966b71769ccd40822056679c7633590a7e5ecc90127af3df1283c07bcc504e3f4c3e8272ec975097d7abdf6ca2439fadbdd907764e3f22029521678f6b74192724e2a6b451fac6600f8625db37b2be0f07c177b30c9f68877899311eed67942a3e43e1e5928ab0e650e67901eaa77e44ff1a877b4094470edccad0165b99dc518a1f123c96da42cbe5980063f2c0e86e3ec24f3aa37f32f749cfe2dbf531e68ac854a62a3c1d3b4d7096d60b8796a5bbcfe4013436808ea7bdc0e13e3f48561439a4c1c6d7e02b6d738bac0000000000000000000000000000000000060d161a21260000000000000000";
+    const TX_CERTIFICATE: &str = "9210000000000000070000000000000092100000000000001113e96cbc9508de1f4c59b354f5bb27ab33b9329966c8263cad99fdfa05d50e01414141414141414141414141414141414141414141414141414141414141414101000000000000002000000000000000a8321c56c45cfb11d47de6b26080cc8f69f26d48f0c966bb9f031d075da393dc01010000000000000001000000000000009210000000000000070000000000000000000000000000002000000000000000a8321c56c45cfb11d47de6b26080cc8f69f26d48f0c966bb9f031d075da393dc92100000000000001113e96cbc9508de1f4c59b354f5bb27ab33b9329966c8263cad99fdfa05d50e0141414141414141414141414141414141414141414141414141414141414141410100000000000000070000000000000020000000000000009842a14dc146fb3541d7bb1469fc42bf86ca68d75d2ef4a6e269a799c7c8e99d060000000000000020000000000000006d77f830b6e2adb75a4106e4a266ddf80286b6127f8e3e3b8f33e3443c2c5eef20000000000000000fe8669a66d0e3bfd721aaee57cdce85d50569a7820e626d117e9af58de966d520000000000000002b2cb8faf6677ba79cf282d339ada1386c72b0fa22e3d8cace8df31477af3b8a200000000000000034157bb0bffd7742e9648763e8355803d6d1c97391a4c6d091b3d35f02b09f3d2000000000000000662eea4e083f8a459629963ac5c9b0db3a0e669b95560cd7056edf1344258cf62000000000000000a82a766ff5641a1ba69904b32967f628506b860d05e529d80f3829f4789c6e94ed0c000000000000a8ec2e2957684557fb44f95a34a329b72be10a23fb8eff42af4ebc89078b99cba0fb2278baa291fac9c1f78b1c711005289830656d43be7588372e2abd5a73560983e9017b070f4b76be92f0da970e19e63149f095d5bec8bffe50faeead1090fa544588cdb572af186463fa8731fb23a50e8ba6c5318acb10d5b0d4b343b68506e49d092ae2df01927f459909c0cb363a243e1157baf080086449ae147a2ff3da5b50045230cb37c60c70babe2119a9e6b29e9e011917d9f7a8bef7a3714bd101ef2703a227708d5438ccf637ed1920b2a5e69e286302d1dea457c4a10b5540232c895519e33bce6b207f9420d1d9ddb295038ebe254c54a3e91f4ba977542b20cbd2eae4c3212ea3acce13146d762a832c1aaf0f6d0d525b75376c3a138fd6937bd2cce3d37ae6b834819bb5ddd85a244648249e26fd53b43aa747197ac59f5154887cdbd9a03b5a4734711cffcffa7970073fe4e90fa665cfb836d3586597bb10ea7f3840da0ac5cd06e44324319a9a459dd2040ec8f85f4b82f41fbaa09397edf069fea49a32efeb0d213fe900e1b90ec3cac4ba0e9e53c601bdd8e6452b069f27a0ccd6d206e0b7fc61b5eff0f762a5d2c3d68f121bfe4e7b6be23d25c6e22ab0ca9f47d3772f18fdf19b6bd862fa2de92d9f170566b6ce83277d180d27c2eb4948bf23c2272bd8b73d3003a01fdd25aa40a5ee6613b1090b0ca32590c8ef2a64cbdfd9ed2c5ccad29a34f682844a35b440eb9b82b728ab5e729b5c4fd808093cf968ef2b436c035a59e13b7ed972969a3c462f6690ffe735a0306e686af238eb4f92ecf09dcc9b416b3e8e45f0cd58456e7edd68b5ae2e70634a0c93d0207e0c328dd7f96152cbcf7f79ecafbdf407d7860d93522e2533f675b36b07cd7cce7a59b8b90d0b789003a0604a077e1a703a077cee04b49ec026d903688ab995d6da2dc34ab6d2e6be2c83f4cb13a8872ea81079cd8cc40c82c305177c6b1127b5d42863bdc3fe6475ec7827aad2d9c151f7543dc526883a62998eac1d6da0b65d5d8e09ddbc526c529c6241b21054d689013ad498901662532e12ffe58e1c992ed74f1af9ee6cdefd4bcb0d97a0b374488cbef2956ae56e671e11bdcd9aa7f31fbbe4ad3040207d3fdb15a4728c14b65f029e1462eb7143453363c7a2fbfc665b8e7396ba1be7abc19540c84a71162cb2b87e1e1c6738ff4a7a5a1f21d6eec580ee64d44cdedb19b36b754a86c3c3f88618da9525cbd1d955984d85b08d24c5e2301c2c23d18aa110f9111719cddbcd60a4f81e5b9740f38cb201f63250184afa59f3beba2c74e24da2a2e1127017d3b2d9cbb005c770a86cd3ccd4bcea68485b053f6a7a77d1fc8e38ea362b34cd3aacc0ccf0e809b3a2d2a794aa5e9837f35fac09cbed7da7cbd246d2193f428fc74ad1e996b5b629a76780ab128abe0652318dede33d4fce1ea4d7ad1d198c1058b0db72970f70138f538b3b9071e0ae772d6748fd00a3c55cf5bf6eb57c4883e7174a6c706b8420374f062be3a1cd537505766deb7ea603a67c0987169907da08daae45a18d2fcda63e879182755a8c2dd521c3d54e1f74f1df6ddcf728750936e9ccba9230a7cd2458c41d523be91e77cbb258760a86e90655fa37d016f2406e9b79076467b5323a9e7c79979064be5d1c7689ea1aa5df59b86fbc47fc9a924a15739ff537142f582c8ad48e0438e97ef2c10d6672c5d2c63fe17b8638d37c2bd392db30d825f09a7689f2724305368123f40e84979f22961a971e1c685d2ac06dac3f7354bc008d20b7bcf84c34e871499021923f45468820049a6d89ba591923b118113429e9f5bd74f1eb8ae08a5cb59f3a6ab8cffc4fabb697c95bf2f30555b3e13a653c2763ffc6e4f9f41c39aa961f4b7e6f146e069837e398d0c66dca6815883f7a16e57eae9ea4d63afde34d08a86da0157d16f93dc531f414f1429518afabfb60ca987bb5576f29746a9980571d5f78ddd43b1fa4908d56760b021413f2116df0c0fd6dfddd483d4da1f86ff8717dc46c6688a34d81cc5cf02c5247c23ae794005c07a20a3d4dbc4ad288036f9c3cc6844648d477c2ffb93ecfec4a758929a87b32b1aa37220b26e7e435d5962010c4c0341e3f9886251d72134b0a7b36daa601cd4161a2b6f8c303a491916b910220b43f60457f7783d6b41cd9696305eafded58c86e76c336c818f425305dd4229f057770d0812548bd60bfe84f5bc321b1b0fc1525c45ce50239a97c76be4a52762dc7667f876cbd5f120ca945627aa7b83f3052ed9dc23887b9c6d14eab1b621e6d59f61b95a07e7c4b397d8da392ddefe6d4b083077ab53e92ca695ba3b3adf4765b59d07e706d7b892ee7fe7e6998e83ae9cdcfa34c8cc71a4b24a820d414fc813bea6d628cf914c602d7109ee9b695049768bdcb53bc49f688155460b22c54fefb09622f3ec5d834354065da217ae126154117100616e2f49107f70ff6077ded23da480528c94de14c91c2636ea28d708433ce1b7ccf46ef89207467ffad5e43339e0df2be0017b3bb42d9f0720256dd35c2215c50e27cacb8fc1b7751387b149c7009bd57c9632dec6a3a5a909cdbdc7c690de78222711efb98320b8e5068ffdb61ad553828a7d865cb7947416aff3b00c075150f7e7f80f25187b4272e2abfb7e81857e82543868e500181ab5c89a9cded35fdfd26e38adfcd8151074703c24c2e90b88a2f7e1fe61bbda43069d995314aa6cdc757ad4795efea5feabf304c7b415dd157f26820a2344c95cd4d01d36efb35514cd663a6b01525eb0bfba5f62fa94a16bc36a03c693a6b0acd420f8f3ee45395667140a1e7ceceb97589a8152d4b7f26a3724cfbe3b1c3ef40b64bad85333b35b388a76f0c2183eedfa154e97e2e2a8c60f2ca5f09c08b662ea1daacea03707bacf9bbdc118afc92edda740c323cd6b465df55b608f6a8565ffe14e9d604eda907a0dbcb6c8748557766af7bed3d1f3bd84d72355fcfff7e6698ab65bc48ad8148d45ca8d2a9b080cb2bfd6764c2d661ef2f390c125be53c10e49e43ff66980cb53993555e73a550735a2548feb6446cace64e52500889802e040c78bcd10358355f6494705c968e0c58d4d809b56de05e2235d0eed8a0347de1f732b9ec317503e4fa55cec9f75d45b2d3dd1b4b5dbafd4c0c90ec14b2e5994a4aa2a7849549e142675d27f41d2e23daf76b36954c83dfab6988a91106b013cbf815dfdbe38f47d3d5971cb5e8947239c7c5312f5fa824d67cd26537b31e60cec55f97505115a6ec1440145840058583860f2c2bd1b30c5894ce6c26e9a65e56435343ec0f8e2857efa59c0268ff26ccd56e1f667d88f7e1e7373163e67e3eab4e36c6895281222faebcfa1f54993705c8a336696233cefae4e6c4f8a8855a4b86566064607b0f00af1e96f6da359e2f215e8c6409ad45b771e6d834f2712b75164ffc3739c4c7940526ff4987c38d1fd50d8189279d1c36f8b5e605b7c7fc43536b396e320894d74f2143f16aeb9ff943293c5c8fa18e287297397fb103e17b29eb47bd20655963fc47cb25879f0feb0c0d2b9b3d500dae711c8bc6b6850ca82e1cf951ee9b8394196414a6f6a352613d3fda4084589678f2281fcc031638bb5993eb98bd62a3c64f3b9e76515cc48b9c8d3ab69f7a1bd7233a02b470ccd058adbe15443b3658b270aeb35efb257f909ecc8978b5baa935ab09c48e82f2b7fb1b94892e8beae22f3a18d73fa205d0ebc05e91f1f0b7e524bf14cca02afd666985ae54ed2a44015d30f9cd5c41cab4c6f77807cf990c9b036efe585c0187a5476f0b25ca4e38cc0bb5dd173798d738010d63cde62672cc64152d260c7b7bde9cc55f2f190aa4f246878935e68643882068ed7d1e1c7a233b6503bdef6351f633773785ab1977f23f7605d10db2f4495ebae8e80f1574dd9b66d950e6cd18b7b91c1bbd2ae6784d53646019018d8db8024326834091a8bf1d57f40395a3eda33a2f7c073d9f59291c98c7ec54a1ba3d660262d7173d9f3cb4d3be1ade1cde80b8fb4a8cc0f0213fdf56c00bc4901580dd44ddb711b15de0f4c067bf1429c9b3f33365458c3f2b69fe9a9a3c76f0d6f1e28bff67cfccb8b1fb5a544bdbde4577c62d2c20f8fbd1738de7c68ca906451d2e3f1b8ffc17d36a4e12b44fe00bf3c29c6be703b0fdd2d4378c883dc0bde072da35b3838d6fa2d3a3c9284cbcaec2f6b7c82d78e5ee27bf60aa3d6fde8e12b0b8ef235899b5cf89f8eb08f5921467249f763afbbc839fbe8bbe0b52e36d2b563dbc9ec58c52965ba0ff26b07ac8170ef0b483bddcf8d3e05f699a52ff3afe5a1ec63d144eb0fc27a1adac1e82f34d9749889e9b445f01682ac496a06adadc6657d6346c8e4c906db2c8d7ae9632aee802cf3ed579cbe267e2d4f17ffe2844c38b340ff478f01be2b8ea55fc497c5f9580547ba1b8db1e90e2d49729612cb9a1a5221fc682a322d13c4afedb334a634c1cf257da625c60068122f3a8aeea6ca5ae07289373380cde569c5fdbe0f8b4ba3d5a95c9d992767145d2b4f49d4bd034d4ef3cd2d0e681e98630d0b9501830637d86a4cc5563707ac500183d5cd4dbf200086c8d90f4f893b9cedef2091b4c000000000000000000000000000000000000000000070c131a1f220000000000000000";
     const TX_ATTEST_PK: &str = "e0918f8265f34cbcfc70a75981a38540b1fe8ca76092df418540c1380ba44288e0fca3ce4c4ea6c905d2d6dd1a73e28f3a553f78f0bd6e648c6179ef2647070ae4687d27547fc10629b44f15fa1c70a40716375f1076f8dcac57a5dfd5027e0d2d36d441ff75dbe7b3d33b2b34a8bc0e07d75b3d8d9945e774f987a8bc7a4e00c27265d869b68a3a8e33a14dd8508a0b7adff4c58925c35636186f1d6f6842e5aeeda2e2ff8bcfe063a080bc989fc4c000d501d28bf6978e31c421040b504b31fe4040eec45c6a5bf42207068224f5746c75880144cf8edd933a717976f1a1aedee087d8f44e1659b8e88424e2864dd32849d841287cefd02e83fabe8d271325cc26266461925832e9a4382d16f1f9c6c1a9b677b8a8fa1606a59b372ad66a80773c056647fc346b79cfce9323bfe7fbf7f07235b949654dac8916b47334c7ed7eb6acfe06581a29ebd02d57ee1d9db20f25ca0e5b477caa5fa635905bdb803ceb69cd067944bfca49aa62093c1b5d17186528f78e79ae2f7edd786a4915970e34517670f72feb5203350ed3283dd0dd6e654e5a72dffef8d03d2117bb1b19bbe56607f11a722daef3a98a0a32af4ac40a1968442eb128592bcfbde1ebe926b46a46f48aa255a01968c52581d9a44984c489a12d135dd804658bc23f42652c8d9eea169a10074b3846f459054bfd7be3649db1e786a78c5518cb37e99f6c4a2c6639a990fec3ee4558e4fa6aec9c5e3e04d885478dce2ce141c8e0a318441a41a8a599861c843e4f807d9b9b437de65c9a422047abae1a45f6f569e202ecfd65e3c1d7f73ee1f82df080909ae9a943b8340c08cde5f0a8bf8aaaafcba28c09cf66bed71bc8f6ebc366031eb48e95cbd3c777d0c797854d1d17d9ff8ad9754c4f8f66f7b7f27de875193a4cfd99b96f456c9e1a63db8b08eb01e434e5fd8a6ee22c3ec2335cfe1c7bce484e29df2593d18faf20523441dc71aae22dd26e604dec0ced45c9f34e8fe66276dee13b3d04ad9546d9712791fb33e08827d9146a7130125f139d71982898d9bb7182eb10b624cb54a85dae100cede8accd247bab68646c47b44ce181fa0f44aa35205bfa48525cefb362b039e1d6cc747777d419eafd05cbdf4912f1a58597d50c828f1111601a4f9db780b1cdf578211edea900f9a163ca07bd35518c1529fe9a649df5ce4e17281a2749144332a6b4f579cc179d16d54035b66418afd4e305b58cde1a39ef6427544e4a1fcdc8fe0c0fd20c92c018e12750eb5779419c87eb9f8d740e4a52b2ac2af8b3507b2133cabf15258c2cb1e35ae228b1dd42a6dd1d652c449d768089f7b8827cc30d7cb1aa41b8bd53f8356587d94021d09cebe938bfcf146f62ebee6fed8cb916fa53496773d3a60f3171967c0fda7a3f42ddb92391741b6c61f4eb9faed8a3dadb3cc038db810603ac40042cca25fb4a88d9a55ce1c4d250fca673764e2e9415a0c5985b254deab7c59a6be122e190c1d8f416bd9271495d2c4747de60b2e85db74f92e030114300bc7efbb620e64f5e501a102f4eb194f7a8a314509f885bd4968431f86fc6e9038daf8f3f9d6d539a42c86b1750fb0912636d1790de6bd871ecbf33c76380d6ba3cd180f4dad0e51f109314d0bc6794c68eac5dd8375aaf9b59fe51d04cde7290e2d301417089fdbec6a4379cecad89eb52bcccc096b7627ac34c9acfb1900dc59c63116496404de7825bde8a7e262429ed552c14e473cb4bbaf4291bcd921672b5e7a6c3c863297adeb92cbe79581feeb866c8dfdb90d575666bad82cc8f4c27d3d62bb8a96d3c635c0353dc8581fa223b301dcbdc184869c0613fc76e68bbec3a66d587252f8be5da104ba29f003e799de30063d17dc5219209b7b0a133c7c5f9748b1f3f52f6ad51f2e915497520629ef9068d8df3afc920eb697a6ef8abe01876580f1b652c0cf01f785f15e1fb24fa1b196a6d50866dbb546ac3b80a64ea7292bf78bdd7bb4a8ab615a90b06ea9403332c6d049d614ab4a788463321a1b4a33f160cee7c8c0cd4452bc65caea71221d5ea91ee3d2e203dc496013bc0ab2299f3db7108cb2907e0ec154ee3ef5f5825be272299d64899f45a86be7612f00fd8d0d62e73c2d1c80aef98d94c4078a58d228abf4aad54e78151b854fc4992c7aa74e98a36deadbe11acf3cae8a129c6414ca0765dad6770f6eefcf3004a21fa31fc2d03d1edb27521d2bf0341267752eaa0cbafdfc3d2ad65574c29139104e4389a435ffecf50d7b0ed94627271096d39f71ce781a49c06ae2e14184c6e23a659802a5a1cce3a7a815f13e6990690c8b5d623cb8a2094e1abdd89873547ebd3343a7c7b63a4dccc3df5dec572429864ef77f16a367fbf3efc772395f9b1606ba56ef3c06df8e984f3eabb83f029d483d175f5406e6fda640504a1a268d08a66a2be626422f1f0d2d67fcb93058f8f23c3f895b62704d8e6a2fed684809e1bd11ba5ead4f811c7e513d450f6bcb4edda8d5fe7b4ede0f2d3d23fd78b099d606ab0645eb78f91170061b73320d5469184acfc8e0d5af8f06b4f10994d11cbdce87f23c101baf93479f101d6f7129d65af887be9f996febde2a75e2874a69cd72bf8bda79143c61ee471896c77390381e8ed4439f54b01ce3a4349cb9049daab9a31980550386eebc782a05aa9b4ced29c7409ace7e4c2d0a667af5a96af42c28463448aa15484b85b41ceebf01198ce369037e4a3d6bc41175da2d8d3f12829508605";
 
     fn tx_steps(sibling: &str, left: bool) -> String {
