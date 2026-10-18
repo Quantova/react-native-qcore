@@ -147,8 +147,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="v$version"
+          if [[ "$GITHUB_REF" != "refs/tags/$tag" ]]; then
+            echo "binaries are packaged only from the tag $tag, this run is for $GITHUB_REF" >&2
+            exit 1
+          fi
+          digest="$(git rev-parse --verify "refs/tags/$tag^{commit}")"
+          if [[ "$digest" != "$GITHUB_SHA" ]]; then
+            echo "the tag $tag points at $digest, this run built $GITHUB_SHA" >&2
+            exit 1
+          fi
           awk '{ print $2 }' SHA256SUMS | while read -r built; do
-            gh attestation verify "$built" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" > /dev/null
+            gh attestation verify "$built" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$tag" \
+              --source-digest "$digest" \
+              --deny-self-hosted-runners > /dev/null
             echo "attested $built"
           done
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8

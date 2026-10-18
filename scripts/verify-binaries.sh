@@ -56,11 +56,34 @@ if [[ "$PUBLISH" == "1" ]]; then
     exit 1
   fi
   REPO="Quantova/react-native-qcore"
+  VERSION="$(node -p "require('./package.json').version")"
+  TAG="v$VERSION"
+  if ! TAG_COMMIT="$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}")"; then
+    echo "the tag $TAG is not in this checkout, publish only from the tagged release" >&2
+    exit 1
+  fi
+  if [[ "$(git rev-parse HEAD)" != "$TAG_COMMIT" ]]; then
+    echo "this checkout is not at $TAG, publish only from the tagged release" >&2
+    exit 1
+  fi
+  if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    echo "this checkout has local changes, publish only from the tagged release" >&2
+    exit 1
+  fi
+  merged="$(gh api "repos/$REPO/compare/$TAG_COMMIT...main" --jq .status 2>/dev/null || true)"
+  if [[ "$merged" != "ahead" && "$merged" != "identical" ]]; then
+    echo "$TAG points at $TAG_COMMIT, which is not on main, refusing to publish it" >&2
+    exit 1
+  fi
   while read -r built; do
-    if ! gh attestation verify "$built" --repo "$REPO" --signer-workflow "$REPO/.github/workflows/release.yml" >/dev/null 2>&1; then
-      echo "$built carries no attestation from the release workflow, refusing to publish it" >&2
+    if ! gh attestation verify "$built" --repo "$REPO" \
+      --signer-workflow "$REPO/.github/workflows/release.yml" \
+      --source-ref "refs/tags/$TAG" \
+      --source-digest "$TAG_COMMIT" \
+      --deny-self-hosted-runners >/dev/null 2>&1; then
+      echo "$built carries no attestation from the release workflow run for $TAG at $TAG_COMMIT, refusing to publish it" >&2
       exit 1
     fi
   done < <(awk '{ name = $2; sub(/^\*/, "", name); print name }' "$SUMS")
-  echo "every native binary is attested by the release workflow"
+  echo "every native binary is attested by the release workflow run for $TAG at $TAG_COMMIT"
 fi

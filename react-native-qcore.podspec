@@ -13,7 +13,7 @@ Pod::Spec.new do |s|
   s.license      = { :type => "Apache-2.0 OR MIT" }
   s.authors      = { "Quantova Inc" => "engineering@quantova.com" }
   s.platforms    = { :ios => "13.0" }
-  s.source       = { :git => "https://github.com/Quantova/react-native-qcore.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/Quantova/react-native-qcore.git", :tag => "v#{s.version}" }
 
   s.source_files = "ios/**/*.{h,m,mm,swift}"
   s.preserve_paths = "ios/generated/quantova_qcoreFFI.modulemap"
