@@ -3,7 +3,7 @@
 
 [package]
 name = "react-native-qcore"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 description = "The React Native binding for the Quantova post quantum client core, generated over QCore with uniffi so the QMask wallet derives keys and signs on device with no wasm."
@@ -22,7 +22,7 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
 
 [dependencies]
-qcore = { git = "https://github.com/Quantova/QCore.rs.git", rev = "d2112c88b6b31d84f0d27d122b9b38dfd561eabb", default-features = false }
+qcore = { git = "https://github.com/Quantova/QCore.rs.git", rev = "49813320f0dffeacfd250741887709c530d1af10", default-features = false }
 uniffi = { version = "0.29" }
 zeroize = "1"
 thiserror = "2"

@@ -409,6 +409,11 @@ pub fn chain_id_from_name(name: String) -> Result<u64, QcoreError> {
     qcore::checked_chain_id(&name).map_err(err)
 }
 
+#[uniffi::export]
+pub fn gateway_protocol() -> u32 {
+    qcore::GATEWAY_PROTOCOL
+}
+
 fn parse_key32(hex: &str) -> Result<[u8; 32], QcoreError> {
     let bytes = from_hex(hex).map_err(err)?;
     if bytes.len() != 32 {

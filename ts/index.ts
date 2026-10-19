@@ -49,6 +49,7 @@ export interface QCore {
     genesisHash: string,
   ): string;
   chainIdFromName(name: string): bigint;
+  gatewayProtocol(): number;
   boundedValidUntil(
     chainName: string,
     head: bigint,
@@ -145,6 +146,7 @@ interface QcoreNative {
     genesisHex: string,
   ): string;
   chainIdFromName(name: string): string;
+  gatewayProtocol(): number;
   signPayableCall(
     seedHex: string,
     index: string,
@@ -484,6 +486,9 @@ export const nativeQCore: QCore = {
   },
   chainIdFromName(name: string): bigint {
     return BigInt(native.chainIdFromName(name));
+  },
+  gatewayProtocol(): number {
+    return native.gatewayProtocol();
   },
   boundedValidUntil(
     chainName: string,
