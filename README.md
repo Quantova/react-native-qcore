@@ -40,6 +40,16 @@ const signed = await secureQCore.signTransfer('main', session, 0n, to, '5', nonc
 11. Every signer takes the current chain `head` and refuses a `validUntil` that has already passed or lies more than `maxValidityBlocks()` blocks past it. `boundedValidUntil` gives a deadline inside that window.
 12. Signing for a retired network name is refused.
 
+## Threat model
+
+The module protects the seed of every vault account, the recovery phrase, and the nonce ledger that keeps a signed nonce from being handed out twice.
+
+It trusts the Android Keystore or the iOS Secure Enclave and Keychain of the device, the lock screen of the device, the genesis hash and validator roster the app pins, and the native libraries listed in `SHA256SUMS`. It does not trust the gateway, any head or nonce a gateway reports, the device clock, or the JavaScript code of the app beyond the calls it makes.
+
+A seed never leaves the secure storage except through `revealPhrase` after a fresh authentication, and it is wiped from memory when the app goes to the background or stays idle. Every signature binds the chain id and the genesis hash, so a transaction signed for one network never lands on another. A nonce once signed is never handed out again, also across processes, restarts and crashes, and a ledger restored from an older copy blocks signing until it is reset. An account with history from another device signs only after verified finality certificates show that anything signed earlier can no longer land.
+
+Two limits remain that no code on the device can close. An attacker who controls both the network the app uses and the device clock can make the wait after importing a recovery phrase end early, so a transaction signed on the other device may be refused by the chain, and no funds can be taken that way. An attacker who can already write inside the private storage of the app can race the nonce lock in a window of microseconds, which again can only make the chain refuse one of two transactions. Left to the app are protecting the device and its lock screen, pinning the genesis and roster of the network, and showing the user what is about to be signed.
+
 ## Low level functions
 
 `nativeQCore` exposes the same derivation and signing functions over a seed given as hexadecimal, together with the proof checks `verifyFinality`, `verifyEvent`, `verifyTransaction`, `confirmTransaction` and `decodeEvent`. The seed functions take a raw nonce and keep no session, so they are meant for tooling and tests and not for wallets.
