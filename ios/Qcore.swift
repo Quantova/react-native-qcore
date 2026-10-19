@@ -309,6 +309,8 @@ class Qcore: NSObject {
         static let keyLabel = "com.quantova.qcore.nonces.manifest"
         static let recordKeyTag = Data("com.quantova.qcore.nonces.record".utf8)
         static let recordKeyLabel = "com.quantova.qcore.nonces.record"
+        static let readyTag = Data("com.quantova.qcore.nonces.ready.1".utf8)
+        static let readyLabel = "com.quantova.qcore.nonces.ready"
         static let macLabel = "com.quantova.qcore.nonces.4/"
         static let sealVersion: UInt8 = 4
         static let macBytes = 32
@@ -465,7 +467,21 @@ class Qcore: NSObject {
             return Header(tag: tag, alias: aliasName, next: next, end: end)
         }
 
+        static func markReady() throws {
+            if key(readyTag) == nil {
+                _ = try newKey(readyTag, label: readyLabel)
+            }
+        }
+
         static func stored(_ account: String?, _ known: String?, boot: String?, uptimeMs: UInt64) throws -> NonceStored {
+            let first = try read(manifestAccount, manifestMax + 1024)
+            if !first.present, key(readyTag) == nil, try !anyRecord() {
+                let orphans = try keyTags()
+                if !orphans.isEmpty {
+                    try guardLock()
+                    try deleteKeys(orphans)
+                }
+            }
             let item = try read(manifestAccount, manifestMax + 1024)
             let tags = try keyTags()
             let aliases = tags.compactMap { String(data: $0, encoding: .utf8) }
@@ -473,6 +489,10 @@ class Qcore: NSObject {
             var tag: String?
             var manifest: String?
             if let box = item.data, let header = header(box) {
+                if key(readyTag) == nil {
+                    try guardLock()
+                    try markReady()
+                }
                 tag = header.tag
                 let others = tags.filter { String(data: $0, encoding: .utf8) != header.alias }
                 let mine = counter(header.alias) ?? 0
@@ -610,6 +630,7 @@ class Qcore: NSObject {
             for record in batch.records {
                 try save(record.account, record.state)
             }
+            try markReady()
             let written = String(tag.dropLast(17))
             try deleteKeys(try keyTags().filter { String(data: $0, encoding: .utf8) != written })
             return tag

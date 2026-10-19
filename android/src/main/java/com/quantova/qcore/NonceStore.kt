@@ -95,6 +95,13 @@ internal class NonceStore(context: Context) {
 
     fun stored(account: String?, known: String?, boot: String?, uptimeMs: Long): NonceStored {
         val manifestFile = File(folder, MANIFEST)
+        if (!manifestFile.exists() && !NonceKeys.ready() && folder.list()?.none { ENTRY_NAME.matches(it) } != false) {
+            val orphans = NonceKeys.manifestAliases()
+            if (orphans.isNotEmpty()) {
+                guard()
+                deleteKeys(orphans)
+            }
+        }
         val aliases = NonceKeys.manifestAliases()
         val present = manifestFile.exists() || aliases.isNotEmpty()
         var tag: String? = null
@@ -103,6 +110,10 @@ internal class NonceStore(context: Context) {
             val record = read(MANIFEST, MANIFEST_FILE_MAX)
             val header = record?.let { header(it) }
             if (record != null && header != null) {
+                if (!NonceKeys.ready()) {
+                    guard()
+                    NonceKeys.markReady()
+                }
                 tag = header.tag
                 val others = aliases.filter { it != header.alias }
                 val counter = counterOf(header.alias) ?: -1L
@@ -157,6 +168,11 @@ internal class NonceStore(context: Context) {
             writeManifest(plain, next, null, key)
         }
         for (record in batch.records) save(record.account, record.state)
+        try {
+            NonceKeys.markReady()
+        } catch (error: Throwable) {
+            throw IllegalStateException(WRITE_FAILED)
+        }
         val written = tag.substringBeforeLast('.')
         deleteKeys(NonceKeys.manifestAliases().filter { it != written })
         return tag
@@ -348,6 +364,7 @@ internal class NonceStore(context: Context) {
 private object NonceKeys {
     private const val KEYSTORE = "AndroidKeyStore"
     private const val RECORD_ALIAS = "com.quantova.qcore.nonces.key.1"
+    private const val READY_ALIAS = "com.quantova.qcore.nonces.ready.1"
     private const val KEY_BITS = 256
 
     fun recordKey(): SecretKey = synchronized(this) {
@@ -364,6 +381,14 @@ private object NonceKeys {
 
     fun manifestAliases(): List<String> = synchronized(this) {
         keyStore().aliases().toList().filter { it.startsWith(NonceStore.MANIFEST_ALIAS) }
+    }
+
+    fun ready(): Boolean = synchronized(this) {
+        keyStore().containsAlias(READY_ALIAS)
+    }
+
+    fun markReady() = synchronized(this) {
+        if (!keyStore().containsAlias(READY_ALIAS)) generate(READY_ALIAS)
     }
 
     fun delete(alias: String) = synchronized(this) {
