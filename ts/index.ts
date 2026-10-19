@@ -22,6 +22,7 @@ export interface QCore {
     chainId: bigint,
     validUntil: bigint,
     head: bigint,
+    genesisHash: string,
   ): string;
   sign_call(
     seedHex: string,
@@ -35,6 +36,7 @@ export interface QCore {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
+    genesisHash: string,
   ): string;
   signRegister(
     seedHex: string,
@@ -44,8 +46,16 @@ export interface QCore {
     chainId: bigint,
     validUntil: bigint,
     head: bigint,
+    genesisHash: string,
   ): string;
   chainIdFromName(name: string): bigint;
+  boundedValidUntil(
+    chainName: string,
+    head: bigint,
+    wallSecs: bigint,
+    floor: bigint | null | undefined,
+    floorAgeSecs: bigint,
+  ): bigint;
   signPayableCall(
     seedHex: string,
     index: bigint,
@@ -59,6 +69,7 @@ export interface QCore {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
+    genesisHash: string,
   ): string;
   signAssetCall(
     seedHex: string,
@@ -74,16 +85,17 @@ export interface QCore {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
+    genesisHash: string,
   ): string;
   nameKey(label: string): string;
   mapSlotKey(mapDomainTag: bigint, keyAddressHex: string): string;
   mapAddrWordKey(mapDomainTag: bigint, key32Hex: string, word: bigint): string;
   scalarSlotKey(slot: bigint): string;
   checkOrderExpiry(expiry: bigint, nowSecs: bigint): void;
-  verifyFinality(chainId: bigint, headerHex: string, certificateHex: string, rosterJson: string): string;
+  verifyFinality(chainId: bigint, genesisHash: string, headerHex: string, certificateHex: string, rosterJson: string): string;
   verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): boolean;
   verifyTransaction(transactionRootHex: string, txId: string, leafHex: string, stepsJson: string): boolean;
-  confirmTransaction(chainId: bigint, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
+  confirmTransaction(chainId: bigint, genesisHash: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
   decodeEvent(leafHex: string): string;
 }
 
@@ -106,6 +118,7 @@ interface QcoreNative {
     chainId: string,
     validUntil: string,
     head: string,
+    genesisHex: string,
   ): string;
   signCall(
     seedHex: string,
@@ -119,6 +132,7 @@ interface QcoreNative {
     validUntil: string,
     transferFee: string,
     head: string,
+    genesisHex: string,
   ): string;
   signRegister(
     seedHex: string,
@@ -128,6 +142,7 @@ interface QcoreNative {
     chainId: string,
     validUntil: string,
     head: string,
+    genesisHex: string,
   ): string;
   chainIdFromName(name: string): string;
   signPayableCall(
@@ -143,6 +158,7 @@ interface QcoreNative {
     validUntil: string,
     transferFee: string,
     head: string,
+    genesisHex: string,
   ): string;
   signAssetCall(
     seedHex: string,
@@ -158,6 +174,7 @@ interface QcoreNative {
     validUntil: string,
     transferFee: string,
     head: string,
+    genesisHex: string,
   ): string;
   nameKey(label: string): string;
   mapSlotKey(mapDomainTag: string, keyAddressHex: string): string;
@@ -167,7 +184,8 @@ interface QcoreNative {
   vaultImportPhrase(alias: string, phraseBase64: string): string;
   vaultImportSeed(alias: string, seedBase64: string): string;
   vaultRevealPhrase(alias: string, title: string, subtitle: string): Promise<string>;
-  vaultResetNonceState(alias: string, chainId: string, key: string, title: string, subtitle: string): Promise<string>;
+  vaultResetNonceState(alias: string, chainId: string, genesisHex: string, key: string, title: string, subtitle: string): Promise<string>;
+  vaultAcknowledgeImportedHistory(alias: string, chainId: string, genesisHex: string, key: string, title: string, subtitle: string): Promise<string>;
   vaultHas(alias: string): string;
   vaultClose(alias: string): string;
   vaultCloseAll(): string;
@@ -184,7 +202,8 @@ interface QcoreNative {
     chainId: string,
     validUntil: string,
     head: string,
-  ): string;
+    genesisHex: string,
+  ): Promise<string>;
   vaultSignCall(
     alias: string,
     sessionId: string,
@@ -198,7 +217,8 @@ interface QcoreNative {
     validUntil: string,
     transferFee: string,
     head: string,
-  ): string;
+    genesisHex: string,
+  ): Promise<string>;
   vaultSignRegister(
     alias: string,
     sessionId: string,
@@ -208,7 +228,8 @@ interface QcoreNative {
     chainId: string,
     validUntil: string,
     head: string,
-  ): string;
+    genesisHex: string,
+  ): Promise<string>;
   vaultSignPayableCall(
     alias: string,
     sessionId: string,
@@ -223,7 +244,8 @@ interface QcoreNative {
     validUntil: string,
     transferFee: string,
     head: string,
-  ): string;
+    genesisHex: string,
+  ): Promise<string>;
   vaultSignAssetCall(
     alias: string,
     sessionId: string,
@@ -239,7 +261,8 @@ interface QcoreNative {
     validUntil: string,
     transferFee: string,
     head: string,
-  ): string;
+    genesisHex: string,
+  ): Promise<string>;
   checkValidUntil(validUntil: string, head: string): string;
   boundedValidUntil(
     chainName: string,
@@ -254,23 +277,31 @@ interface QcoreNative {
   defaultValidityBlocks(): string;
   checkOrderExpiry(expiry: string, nowSecs: string): string;
   maxOrderLifetimeSecs(): string;
-  verifyFinality(chainId: string, headerHex: string, certificateHex: string, rosterJson: string): string;
+  verifyFinality(chainId: string, genesisHex: string, headerHex: string, certificateHex: string, rosterJson: string): string;
   verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): string;
   verifyTransaction(transactionRootHex: string, txId: string, leafHex: string, stepsJson: string): string;
-  confirmTransaction(chainId: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
+  confirmTransaction(chainId: string, genesisHex: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
   decodeEvent(leafHex: string): string;
   sessionOpen(addressBook: string): string;
   sessionClose(id: string): string;
   sessionKnown(id: string): string;
   sessionRememberAddress(id: string, address: string): string;
   sessionCheckTarget(id: string, address: string): string;
-  sessionSlot(id: string, chainId: string, key: string, reported: string, expected: string, order: boolean): string;
-  sessionSigned(id: string, chainId: string, key: string, slot: string): string;
-  sessionRelease(id: string, chainId: string, key: string, slot: string): string;
-  sessionReleasePending(id: string, chainId: string, key: string): string;
-  sessionOutcome(id: string, chainId: string, key: string, slot: string, accepted: boolean): string;
-  sessionNextNonce(id: string, chainId: string, key: string): string;
-  sessionIsHeld(id: string, chainId: string, key: string, slot: string): string;
+  sessionSlot(id: string, chainId: string, genesisHex: string, key: string, reported: string, expected: string, order: boolean): Promise<string>;
+  sessionSigned(id: string, chainId: string, genesisHex: string, key: string, slot: string): Promise<string>;
+  sessionRelease(id: string, chainId: string, genesisHex: string, key: string, slot: string): Promise<string>;
+  sessionReleasePending(id: string, chainId: string, genesisHex: string, key: string): Promise<string>;
+  sessionOutcome(id: string, chainId: string, genesisHex: string, key: string, slot: string, accepted: boolean): Promise<string>;
+  sessionNextNonce(id: string, chainId: string, genesisHex: string, key: string): Promise<string>;
+  sessionIsHeld(id: string, chainId: string, genesisHex: string, key: string, slot: string): Promise<string>;
+  vaultSettleHistory(
+    chainId: string,
+    genesisHex: string,
+    key: string,
+    headerHex: string,
+    certificateHex: string,
+    rosterJson: string,
+  ): Promise<string>;
 }
 
 const LINKING_ERROR =
@@ -293,6 +324,13 @@ function nativeError(message: string): Error {
   return new Error(message);
 }
 
+function checked(result: unknown): unknown {
+  if (typeof result === 'string' && result.startsWith(FAILURE_PREFIX)) {
+    throw nativeError(result.slice(FAILURE_PREFIX.length));
+  }
+  return result;
+}
+
 function throwingOnFailure(module: QcoreNative): QcoreNative {
   return new Proxy(module, {
     get(target, property, receiver) {
@@ -300,10 +338,10 @@ function throwingOnFailure(module: QcoreNative): QcoreNative {
       if (typeof member !== 'function') return member;
       return (...args: unknown[]) => {
         const result = (member as (...a: unknown[]) => unknown).apply(target, args);
-        if (typeof result === 'string' && result.startsWith(FAILURE_PREFIX)) {
-          throw nativeError(result.slice(FAILURE_PREFIX.length));
+        if (result !== null && typeof result === 'object' && typeof (result as Promise<unknown>).then === 'function') {
+          return (result as Promise<unknown>).then(checked);
         }
-        return result;
+        return checked(result);
       };
     },
   }) as QcoreNative;
@@ -327,6 +365,16 @@ function resolveNative(): QcoreNative {
 const native = resolveNative();
 
 const u64 = (value: bigint): string => value.toString(10);
+
+const genesis = (hash: string): string => {
+  if (typeof hash !== 'string' || !/^[0-9a-fA-F]{64}$/.test(hash)) {
+    throw new Error('the genesis hash is 64 hex characters, the 32 byte genesis of the network this app pins');
+  }
+  if (/^0{64}$/.test(hash)) {
+    throw new Error('a genesis hash of zeros names no network, pass the genesis of the network this app pins');
+  }
+  return hash;
+};
 
 function verdict(value: string): boolean {
   if (value === 'true') return true;
@@ -369,6 +417,7 @@ export const nativeQCore: QCore = {
     chainId: bigint,
     validUntil: bigint,
     head: bigint,
+    genesisHash: string,
   ): string {
     return native.signTransfer(
       seedHex,
@@ -380,6 +429,7 @@ export const nativeQCore: QCore = {
       u64(chainId),
       u64(validUntil),
       u64(head),
+      genesis(genesisHash),
     );
   },
   sign_call(
@@ -394,6 +444,7 @@ export const nativeQCore: QCore = {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
+    genesisHash: string,
   ): string {
     return native.signCall(
       seedHex,
@@ -407,6 +458,7 @@ export const nativeQCore: QCore = {
       u64(validUntil),
       transferFee,
       u64(head),
+      genesis(genesisHash),
     );
   },
   signRegister(
@@ -417,11 +469,30 @@ export const nativeQCore: QCore = {
     chainId: bigint,
     validUntil: bigint,
     head: bigint,
+    genesisHash: string,
   ): string {
-    return native.signRegister(seedHex, u64(index), u64(nonce), fee, u64(chainId), u64(validUntil), u64(head));
+    return native.signRegister(
+      seedHex,
+      u64(index),
+      u64(nonce),
+      fee,
+      u64(chainId),
+      u64(validUntil),
+      u64(head),
+      genesis(genesisHash),
+    );
   },
   chainIdFromName(name: string): bigint {
     return BigInt(native.chainIdFromName(name));
+  },
+  boundedValidUntil(
+    chainName: string,
+    head: bigint,
+    wallSecs: bigint,
+    floor: bigint | null | undefined,
+    floorAgeSecs: bigint,
+  ): bigint {
+    return boundedValidUntil(chainName, head, wallSecs, floor ?? null, floorAgeSecs);
   },
   signPayableCall(
     seedHex: string,
@@ -436,6 +507,7 @@ export const nativeQCore: QCore = {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
+    genesisHash: string,
   ): string {
     return native.signPayableCall(
       seedHex,
@@ -450,6 +522,7 @@ export const nativeQCore: QCore = {
       u64(validUntil),
       transferFee,
       u64(head),
+      genesis(genesisHash),
     );
   },
   signAssetCall(
@@ -466,6 +539,7 @@ export const nativeQCore: QCore = {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
+    genesisHash: string,
   ): string {
     return native.signAssetCall(
       seedHex,
@@ -481,6 +555,7 @@ export const nativeQCore: QCore = {
       u64(validUntil),
       transferFee,
       u64(head),
+      genesis(genesisHash),
     );
   },
   nameKey(label: string): string {
@@ -498,8 +573,8 @@ export const nativeQCore: QCore = {
   checkOrderExpiry(expiry: bigint, nowSecs: bigint): void {
     native.checkOrderExpiry(u64(expiry), u64(nowSecs));
   },
-  verifyFinality(chainId: bigint, headerHex: string, certificateHex: string, rosterJson: string): string {
-    return native.verifyFinality(u64(chainId), headerHex, certificateHex, rosterJson);
+  verifyFinality(chainId: bigint, genesisHash: string, headerHex: string, certificateHex: string, rosterJson: string): string {
+    return native.verifyFinality(u64(chainId), genesis(genesisHash), headerHex, certificateHex, rosterJson);
   },
   verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): boolean {
     return verdict(native.verifyEvent(eventRootHex, leafHex, stepsJson));
@@ -507,8 +582,8 @@ export const nativeQCore: QCore = {
   verifyTransaction(transactionRootHex: string, txId: string, leafHex: string, stepsJson: string): boolean {
     return verdict(native.verifyTransaction(transactionRootHex, txId, leafHex, stepsJson));
   },
-  confirmTransaction(chainId: bigint, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string {
-    return native.confirmTransaction(u64(chainId), txId, proofJson, finalityJson, rosterJson);
+  confirmTransaction(chainId: bigint, genesisHash: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string {
+    return native.confirmTransaction(u64(chainId), genesis(genesisHash), txId, proofJson, finalityJson, rosterJson);
   },
   decodeEvent(leafHex: string): string {
     return native.decodeEvent(leafHex);
@@ -522,7 +597,14 @@ export interface RevealPrompt {
 
 export interface NonceAccount {
   chainId: bigint;
+  genesisHash: string;
   key: string;
+}
+
+export interface SettleProgress {
+  settled: boolean;
+  blocksLeft: bigint;
+  secondsLeft: bigint;
 }
 
 export interface SecureQCore {
@@ -531,6 +613,13 @@ export interface SecureQCore {
   importSeed(alias: string, seed: Uint8Array): void;
   revealPhrase(alias: string, prompt?: RevealPrompt): Promise<Uint8Array>;
   resetNonceState(alias: string, account: NonceAccount | null, prompt?: RevealPrompt): Promise<void>;
+  acknowledgeImportedHistory(alias: string, account: NonceAccount, prompt?: RevealPrompt): Promise<void>;
+  settleHistory(
+    account: NonceAccount,
+    headerHex: string,
+    certificateHex: string,
+    roster: readonly RosterMember[],
+  ): Promise<SettleProgress>;
   hasSeed(alias: string): boolean;
   closeSeed(alias: string): void;
   closeAll(): void;
@@ -547,7 +636,8 @@ export interface SecureQCore {
     chainId: bigint,
     validUntil: bigint,
     head: bigint,
-  ): string;
+    genesisHash: string,
+  ): Promise<string>;
   signCall(
     alias: string,
     session: SigningSession,
@@ -561,7 +651,8 @@ export interface SecureQCore {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
-  ): string;
+    genesisHash: string,
+  ): Promise<string>;
   signRegister(
     alias: string,
     session: SigningSession,
@@ -571,7 +662,8 @@ export interface SecureQCore {
     chainId: bigint,
     validUntil: bigint,
     head: bigint,
-  ): string;
+    genesisHash: string,
+  ): Promise<string>;
   signPayableCall(
     alias: string,
     session: SigningSession,
@@ -586,7 +678,8 @@ export interface SecureQCore {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
-  ): string;
+    genesisHash: string,
+  ): Promise<string>;
   signAssetCall(
     alias: string,
     session: SigningSession,
@@ -602,7 +695,8 @@ export interface SecureQCore {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
-  ): string;
+    genesisHash: string,
+  ): Promise<string>;
 }
 
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -674,11 +768,42 @@ export const secureQCore: SecureQCore = {
   },
   async resetNonceState(alias: string, account: NonceAccount | null, prompt: RevealPrompt = {}): Promise<void> {
     const chainId = account === null ? '' : u64(account.chainId);
+    const pinned = account === null ? '' : genesis(account.genesisHash);
     const key = account === null ? '' : account.key;
     if (account !== null && key.length === 0) throw new Error('a nonce account names a key');
-    const text = await native.vaultResetNonceState(alias, chainId, key, prompt.title ?? '', prompt.subtitle ?? '');
+    const text = await native.vaultResetNonceState(alias, chainId, pinned, key, prompt.title ?? '', prompt.subtitle ?? '');
     if (typeof text !== 'string') throw new Error('the native layer returned no answer');
     if (text.startsWith(FAILURE_PREFIX)) throw nativeError(text.slice(FAILURE_PREFIX.length));
+  },
+  async acknowledgeImportedHistory(alias: string, account: NonceAccount, prompt: RevealPrompt = {}): Promise<void> {
+    if (account === null || typeof account !== 'object') throw new Error('name the account whose imported history is acknowledged');
+    const chainId = u64(account.chainId);
+    const pinned = genesis(account.genesisHash);
+    const key = account.key;
+    if (typeof key !== 'string' || key.length === 0) throw new Error('a nonce account names a key');
+    const text = await native.vaultAcknowledgeImportedHistory(alias, chainId, pinned, key, prompt.title ?? '', prompt.subtitle ?? '');
+    if (typeof text !== 'string') throw new Error('the native layer returned no answer');
+    if (text.startsWith(FAILURE_PREFIX)) throw nativeError(text.slice(FAILURE_PREFIX.length));
+  },
+  async settleHistory(
+    account: NonceAccount,
+    headerHex: string,
+    certificateHex: string,
+    roster: readonly RosterMember[],
+  ): Promise<SettleProgress> {
+    if (account === null || typeof account !== 'object') throw new Error('name the account whose history settles');
+    if (typeof account.key !== 'string' || account.key.length === 0) throw new Error('a nonce account names a key');
+    const members = roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk, root: m.root, root_slots: m.root_slots }));
+    const text = await native.vaultSettleHistory(
+      u64(account.chainId),
+      genesis(account.genesisHash),
+      account.key,
+      headerHex,
+      certificateHex,
+      JSON.stringify(members),
+    );
+    const progress = JSON.parse(text) as { settled: boolean; blocks_left: string; secs_left: string };
+    return { settled: progress.settled === true, blocksLeft: BigInt(progress.blocks_left), secondsLeft: BigInt(progress.secs_left) };
   },
   hasSeed(alias: string): boolean {
     return native.vaultHas(alias) === 'true';
@@ -695,7 +820,7 @@ export const secureQCore: SecureQCore = {
   address(alias: string, index: bigint): string {
     return native.vaultAddress(alias, u64(index));
   },
-  signTransfer(
+  async signTransfer(
     alias: string,
     session: SigningSession,
     index: bigint,
@@ -706,7 +831,8 @@ export const secureQCore: SecureQCore = {
     chainId: bigint,
     validUntil: bigint,
     head: bigint,
-  ): string {
+    genesisHash: string,
+  ): Promise<string> {
     return native.vaultSignTransfer(
       alias,
       sessionIdOf(session),
@@ -718,9 +844,10 @@ export const secureQCore: SecureQCore = {
       u64(chainId),
       u64(validUntil),
       u64(head),
+      genesis(genesisHash),
     );
   },
-  signCall(
+  async signCall(
     alias: string,
     session: SigningSession,
     index: bigint,
@@ -733,7 +860,8 @@ export const secureQCore: SecureQCore = {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
-  ): string {
+    genesisHash: string,
+  ): Promise<string> {
     return native.vaultSignCall(
       alias,
       sessionIdOf(session),
@@ -747,9 +875,10 @@ export const secureQCore: SecureQCore = {
       u64(validUntil),
       transferFee,
       u64(head),
+      genesis(genesisHash),
     );
   },
-  signRegister(
+  async signRegister(
     alias: string,
     session: SigningSession,
     index: bigint,
@@ -758,7 +887,8 @@ export const secureQCore: SecureQCore = {
     chainId: bigint,
     validUntil: bigint,
     head: bigint,
-  ): string {
+    genesisHash: string,
+  ): Promise<string> {
     return native.vaultSignRegister(
       alias,
       sessionIdOf(session),
@@ -768,9 +898,10 @@ export const secureQCore: SecureQCore = {
       u64(chainId),
       u64(validUntil),
       u64(head),
+      genesis(genesisHash),
     );
   },
-  signPayableCall(
+  async signPayableCall(
     alias: string,
     session: SigningSession,
     index: bigint,
@@ -784,7 +915,8 @@ export const secureQCore: SecureQCore = {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
-  ): string {
+    genesisHash: string,
+  ): Promise<string> {
     return native.vaultSignPayableCall(
       alias,
       sessionIdOf(session),
@@ -799,9 +931,10 @@ export const secureQCore: SecureQCore = {
       u64(validUntil),
       transferFee,
       u64(head),
+      genesis(genesisHash),
     );
   },
-  signAssetCall(
+  async signAssetCall(
     alias: string,
     session: SigningSession,
     index: bigint,
@@ -816,7 +949,8 @@ export const secureQCore: SecureQCore = {
     validUntil: bigint,
     transferFee: string,
     head: bigint,
-  ): string {
+    genesisHash: string,
+  ): Promise<string> {
     return native.vaultSignAssetCall(
       alias,
       sessionIdOf(session),
@@ -832,6 +966,7 @@ export const secureQCore: SecureQCore = {
       u64(validUntil),
       transferFee,
       u64(head),
+      genesis(genesisHash),
     );
   },
 };
@@ -915,12 +1050,14 @@ export interface ChainEvent {
 
 export function verifyFinality(
   chainId: bigint,
+  genesisHash: string,
   headerHex: string,
   certificateHex: string,
   roster: readonly RosterMember[],
 ): FinalizedHeader {
+  const pinned = genesis(genesisHash);
   const members = roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk, root: m.root, root_slots: m.root_slots }));
-  return JSON.parse(native.verifyFinality(u64(chainId), headerHex, certificateHex, JSON.stringify(members))) as FinalizedHeader;
+  return JSON.parse(native.verifyFinality(u64(chainId), pinned, headerHex, certificateHex, JSON.stringify(members))) as FinalizedHeader;
 }
 
 export function verifyEvent(eventRootHex: string, leafHex: string, steps: readonly ProofStep[]): boolean {
@@ -959,11 +1096,13 @@ export interface ConfirmedTransaction {
 
 export function confirmTransaction(
   chainId: bigint,
+  genesisHash: string,
   txId: string,
   proof: TransactionProof | string,
   finality: FinalityAnswer | string,
   roster: readonly RosterMember[] | string,
 ): ConfirmedTransaction {
+  const pinned = genesis(genesisHash);
   if (typeof txId !== 'string') throw new Error('the transaction id must be a string');
   const proofJson =
     typeof proof === 'string'
@@ -983,7 +1122,7 @@ export function confirmTransaction(
       ? roster
       : JSON.stringify(roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk, root: m.root, root_slots: m.root_slots })));
   const confirmed = JSON.parse(
-    native.confirmTransaction(u64(chainId), txId, proofJson, finalityJson, rosterJson),
+    native.confirmTransaction(u64(chainId), pinned, txId, proofJson, finalityJson, rosterJson),
   ) as { tx_id: string; height: string; index: string; header: FinalizedHeader };
   if (confirmed.tx_id !== txId) throw new Error('the native layer confirmed a different transaction');
   return { txId: confirmed.tx_id, height: BigInt(confirmed.height), index: BigInt(confirmed.index), header: confirmed.header };
@@ -1033,11 +1172,12 @@ export class SigningSession {
     native.sessionCheckTarget(this.live(), address);
   }
 
-  slot(chainId: bigint, key: string, reported: bigint, expected: bigint | null, order: boolean): bigint {
+  async slot(chainId: bigint, genesisHash: string, key: string, reported: bigint, expected: bigint | null, order: boolean): Promise<bigint> {
     return BigInt(
-      native.sessionSlot(
+      await native.sessionSlot(
         this.live(),
         u64(chainId),
+        genesis(genesisHash),
         key,
         u64(reported),
         expected === null ? '' : u64(expected),
@@ -1046,29 +1186,29 @@ export class SigningSession {
     );
   }
 
-  signed(chainId: bigint, key: string, slot: bigint): void {
-    native.sessionSigned(this.live(), u64(chainId), key, u64(slot));
+  async signed(chainId: bigint, genesisHash: string, key: string, slot: bigint): Promise<void> {
+    await native.sessionSigned(this.live(), u64(chainId), genesis(genesisHash), key, u64(slot));
   }
 
-  release(chainId: bigint, key: string, slot: bigint): void {
-    native.sessionRelease(this.live(), u64(chainId), key, u64(slot));
+  async release(chainId: bigint, genesisHash: string, key: string, slot: bigint): Promise<void> {
+    await native.sessionRelease(this.live(), u64(chainId), genesis(genesisHash), key, u64(slot));
   }
 
-  releasePending(chainId: bigint, key: string): void {
-    native.sessionReleasePending(this.live(), u64(chainId), key);
+  async releasePending(chainId: bigint, genesisHash: string, key: string): Promise<void> {
+    await native.sessionReleasePending(this.live(), u64(chainId), genesis(genesisHash), key);
   }
 
-  outcome(chainId: bigint, key: string, slot: bigint, accepted: boolean): void {
-    native.sessionOutcome(this.live(), u64(chainId), key, u64(slot), accepted);
+  async outcome(chainId: bigint, genesisHash: string, key: string, slot: bigint, accepted: boolean): Promise<void> {
+    await native.sessionOutcome(this.live(), u64(chainId), genesis(genesisHash), key, u64(slot), accepted);
   }
 
-  nextNonce(chainId: bigint, key: string): bigint | null {
-    const next = native.sessionNextNonce(this.live(), u64(chainId), key);
+  async nextNonce(chainId: bigint, genesisHash: string, key: string): Promise<bigint | null> {
+    const next = await native.sessionNextNonce(this.live(), u64(chainId), genesis(genesisHash), key);
     return next === '' ? null : BigInt(next);
   }
 
-  isHeld(chainId: bigint, key: string, slot: bigint): boolean {
-    return native.sessionIsHeld(this.live(), u64(chainId), key, u64(slot)) === 'true';
+  async isHeld(chainId: bigint, genesisHash: string, key: string, slot: bigint): Promise<boolean> {
+    return (await native.sessionIsHeld(this.live(), u64(chainId), genesis(genesisHash), key, u64(slot))) === 'true';
   }
 
   close(): void {

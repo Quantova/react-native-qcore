@@ -31,7 +31,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signTransfer:(NSString *)seedHex
                                         fee:(NSString *)fee
                                         chainId:(NSString *)chainId
                                         validUntil:(NSString *)validUntil
-                                        head:(NSString *)head)
+                                        head:(NSString *)head
+                                        genesisHex:(NSString *)genesisHex)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signCall:(NSString *)seedHex
                                         index:(NSString *)index
@@ -43,7 +44,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signCall:(NSString *)seedHex
                                         chainId:(NSString *)chainId
                                         validUntil:(NSString *)validUntil
                                         transferFee:(NSString *)transferFee
-                                        head:(NSString *)head)
+                                        head:(NSString *)head
+                                        genesisHex:(NSString *)genesisHex)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signRegister:(NSString *)seedHex
                                         index:(NSString *)index
@@ -51,7 +53,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signRegister:(NSString *)seedHex
                                         fee:(NSString *)fee
                                         chainId:(NSString *)chainId
                                         validUntil:(NSString *)validUntil
-                                        head:(NSString *)head)
+                                        head:(NSString *)head
+                                        genesisHex:(NSString *)genesisHex)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signPayableCall:(NSString *)seedHex
                                         index:(NSString *)index
@@ -64,7 +67,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signPayableCall:(NSString *)seedHex
                                         chainId:(NSString *)chainId
                                         validUntil:(NSString *)validUntil
                                         transferFee:(NSString *)transferFee
-                                        head:(NSString *)head)
+                                        head:(NSString *)head
+                                        genesisHex:(NSString *)genesisHex)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signAssetCall:(NSString *)seedHex
                                         index:(NSString *)index
@@ -78,7 +82,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signAssetCall:(NSString *)seedHex
                                         chainId:(NSString *)chainId
                                         validUntil:(NSString *)validUntil
                                         transferFee:(NSString *)transferFee
-                                        head:(NSString *)head)
+                                        head:(NSString *)head
+                                        genesisHex:(NSString *)genesisHex)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(chainIdFromName:(NSString *)name)
 
@@ -109,6 +114,16 @@ RCT_EXTERN_METHOD(vaultRevealPhrase:(NSString *)alias
 
 RCT_EXTERN_METHOD(vaultResetNonceState:(NSString *)alias
                   chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  title:(NSString *)title
+                  subtitle:(NSString *)subtitle
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(vaultAcknowledgeImportedHistory:(NSString *)alias
+                  chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
                   key:(NSString *)key
                   title:(NSString *)title
                   subtitle:(NSString *)subtitle
@@ -125,67 +140,82 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultForget:(NSString *)alias)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultAddress:(NSString *)alias index:(NSString *)index)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignTransfer:(NSString *)alias
-                                        sessionId:(NSString *)sessionId
-                                        index:(NSString *)index
-                                        to:(NSString *)to
-                                        amount:(NSString *)amount
-                                        nonce:(NSString *)nonce
-                                        fee:(NSString *)fee
-                                        chainId:(NSString *)chainId
-                                        validUntil:(NSString *)validUntil
-                                        head:(NSString *)head)
+RCT_EXTERN_METHOD(vaultSignTransfer:(NSString *)alias
+                  sessionId:(NSString *)sessionId
+                  index:(NSString *)index
+                  to:(NSString *)to
+                  amount:(NSString *)amount
+                  nonce:(NSString *)nonce
+                  fee:(NSString *)fee
+                  chainId:(NSString *)chainId
+                  validUntil:(NSString *)validUntil
+                  head:(NSString *)head
+                  genesisHex:(NSString *)genesisHex
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignCall:(NSString *)alias
-                                        sessionId:(NSString *)sessionId
-                                        index:(NSString *)index
-                                        target:(NSString *)target
-                                        argsHex:(NSString *)argsHex
-                                        nonce:(NSString *)nonce
-                                        meterLimit:(NSString *)meterLimit
-                                        fee:(NSString *)fee
-                                        chainId:(NSString *)chainId
-                                        validUntil:(NSString *)validUntil
-                                        transferFee:(NSString *)transferFee
-                                        head:(NSString *)head)
+RCT_EXTERN_METHOD(vaultSignCall:(NSString *)alias
+                  sessionId:(NSString *)sessionId
+                  index:(NSString *)index
+                  target:(NSString *)target
+                  argsHex:(NSString *)argsHex
+                  nonce:(NSString *)nonce
+                  meterLimit:(NSString *)meterLimit
+                  fee:(NSString *)fee
+                  chainId:(NSString *)chainId
+                  validUntil:(NSString *)validUntil
+                  transferFee:(NSString *)transferFee
+                  head:(NSString *)head
+                  genesisHex:(NSString *)genesisHex
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignRegister:(NSString *)alias
-                                        sessionId:(NSString *)sessionId
-                                        index:(NSString *)index
-                                        nonce:(NSString *)nonce
-                                        fee:(NSString *)fee
-                                        chainId:(NSString *)chainId
-                                        validUntil:(NSString *)validUntil
-                                        head:(NSString *)head)
+RCT_EXTERN_METHOD(vaultSignRegister:(NSString *)alias
+                  sessionId:(NSString *)sessionId
+                  index:(NSString *)index
+                  nonce:(NSString *)nonce
+                  fee:(NSString *)fee
+                  chainId:(NSString *)chainId
+                  validUntil:(NSString *)validUntil
+                  head:(NSString *)head
+                  genesisHex:(NSString *)genesisHex
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignPayableCall:(NSString *)alias
-                                        sessionId:(NSString *)sessionId
-                                        index:(NSString *)index
-                                        target:(NSString *)target
-                                        argsHex:(NSString *)argsHex
-                                        nonce:(NSString *)nonce
-                                        meterLimit:(NSString *)meterLimit
-                                        fee:(NSString *)fee
-                                        value:(NSString *)value
-                                        chainId:(NSString *)chainId
-                                        validUntil:(NSString *)validUntil
-                                        transferFee:(NSString *)transferFee
-                                        head:(NSString *)head)
+RCT_EXTERN_METHOD(vaultSignPayableCall:(NSString *)alias
+                  sessionId:(NSString *)sessionId
+                  index:(NSString *)index
+                  target:(NSString *)target
+                  argsHex:(NSString *)argsHex
+                  nonce:(NSString *)nonce
+                  meterLimit:(NSString *)meterLimit
+                  fee:(NSString *)fee
+                  value:(NSString *)value
+                  chainId:(NSString *)chainId
+                  validUntil:(NSString *)validUntil
+                  transferFee:(NSString *)transferFee
+                  head:(NSString *)head
+                  genesisHex:(NSString *)genesisHex
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultSignAssetCall:(NSString *)alias
-                                        sessionId:(NSString *)sessionId
-                                        index:(NSString *)index
-                                        target:(NSString *)target
-                                        argsHex:(NSString *)argsHex
-                                        assetIssuer:(NSString *)assetIssuer
-                                        amount:(NSString *)amount
-                                        nonce:(NSString *)nonce
-                                        meterLimit:(NSString *)meterLimit
-                                        fee:(NSString *)fee
-                                        chainId:(NSString *)chainId
-                                        validUntil:(NSString *)validUntil
-                                        transferFee:(NSString *)transferFee
-                                        head:(NSString *)head)
+RCT_EXTERN_METHOD(vaultSignAssetCall:(NSString *)alias
+                  sessionId:(NSString *)sessionId
+                  index:(NSString *)index
+                  target:(NSString *)target
+                  argsHex:(NSString *)argsHex
+                  assetIssuer:(NSString *)assetIssuer
+                  amount:(NSString *)amount
+                  nonce:(NSString *)nonce
+                  meterLimit:(NSString *)meterLimit
+                  fee:(NSString *)fee
+                  chainId:(NSString *)chainId
+                  validUntil:(NSString *)validUntil
+                  transferFee:(NSString *)transferFee
+                  head:(NSString *)head
+                  genesisHex:(NSString *)genesisHex
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(checkValidUntil:(NSString *)validUntil head:(NSString *)head)
 
@@ -208,6 +238,7 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(checkOrderExpiry:(NSString *)expiry nowS
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(maxOrderLifetimeSecs)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(verifyFinality:(NSString *)chainId
+                                        genesisHex:(NSString *)genesisHex
                                         headerHex:(NSString *)headerHex
                                         certificateHex:(NSString *)certificateHex
                                         rosterJson:(NSString *)rosterJson)
@@ -222,6 +253,7 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(verifyTransaction:(NSString *)transactio
                                         stepsJson:(NSString *)stepsJson)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(confirmTransaction:(NSString *)chainId
+                                        genesisHex:(NSString *)genesisHex
                                         txId:(NSString *)txId
                                         proofJson:(NSString *)proofJson
                                         finalityJson:(NSString *)finalityJson
@@ -239,41 +271,62 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionRememberAddress:(NSString *)id ad
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionCheckTarget:(NSString *)id address:(NSString *)address)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionSlot:(NSString *)id
-                                        chainId:(NSString *)chainId
-                                        key:(NSString *)key
-                                        reported:(NSString *)reported
-                                        expected:(NSString *)expected
-                                        order:(BOOL)order)
+RCT_EXTERN_METHOD(sessionSlot:(NSString *)id
+                  chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  reported:(NSString *)reported
+                  expected:(NSString *)expected
+                  order:(BOOL)order
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionSigned:(NSString *)id
-                                        chainId:(NSString *)chainId
-                                        key:(NSString *)key
-                                        slot:(NSString *)slot)
+RCT_EXTERN_METHOD(sessionSigned:(NSString *)id
+                  chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  slot:(NSString *)slot
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionRelease:(NSString *)id
-                                        chainId:(NSString *)chainId
-                                        key:(NSString *)key
-                                        slot:(NSString *)slot)
+RCT_EXTERN_METHOD(sessionRelease:(NSString *)id
+                  chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  slot:(NSString *)slot
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionReleasePending:(NSString *)id
-                                        chainId:(NSString *)chainId
-                                        key:(NSString *)key)
+RCT_EXTERN_METHOD(sessionReleasePending:(NSString *)id
+                  chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionOutcome:(NSString *)id
-                                        chainId:(NSString *)chainId
-                                        key:(NSString *)key
-                                        slot:(NSString *)slot
-                                        accepted:(BOOL)accepted)
+RCT_EXTERN_METHOD(sessionOutcome:(NSString *)id
+                  chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  slot:(NSString *)slot
+                  accepted:(BOOL)accepted
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionNextNonce:(NSString *)id
-                                        chainId:(NSString *)chainId
-                                        key:(NSString *)key)
+RCT_EXTERN_METHOD(sessionNextNonce:(NSString *)id
+                  chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionIsHeld:(NSString *)id
-                                        chainId:(NSString *)chainId
-                                        key:(NSString *)key
-                                        slot:(NSString *)slot)
+RCT_EXTERN_METHOD(sessionIsHeld:(NSString *)id
+                  chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  slot:(NSString *)slot
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
 + (BOOL)requiresMainQueueSetup
 {
@@ -288,5 +341,14 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(sessionIsHeld:(NSString *)id
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wprotocol"
 @implementation Qcore (QcoreInvalidating)
+RCT_EXTERN_METHOD(vaultSettleHistory:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  headerHex:(NSString *)headerHex
+                  certificateHex:(NSString *)certificateHex
+                  rosterJson:(NSString *)rosterJson
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 @end
 #pragma clang diagnostic pop
