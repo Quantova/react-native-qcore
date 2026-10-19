@@ -223,7 +223,7 @@ jobs:
       - name: publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish pkg/*.tgz --provenance --access public --ignore-scripts
+        run: npm publish ./pkg/*.tgz --provenance --access public --ignore-scripts
       - name: the published version must carry provenance for this tag and commit
         working-directory: react-native-qcore
         env:
