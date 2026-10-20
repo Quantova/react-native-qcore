@@ -1,6 +1,6 @@
 {
   "name": "@quantovainc/react-native-qcore",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Quantova's post quantum client core for React Native. Derives Q1 keys and signs with ML-DSA-65 on device over the Rust core QCore, no wasm. The vault signs only at a nonce slot taken from a signing session whose state is kept encrypted on the device, and the seed functions that take a raw nonce are low level.",
   "main": "ts/index.ts",
   "module": "ts/index.ts",
