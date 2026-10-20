@@ -3,6 +3,7 @@
 
 package com.quantova.qcore
 
+import android.app.ActivityManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Base64
@@ -220,9 +221,19 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         held.put(alias, handle)?.let { if (it !== handle) release(it) }
     }
 
+    private fun ensureForeground() {
+        val state = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(state)
+        if (state.importance != ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
+            forgetHeld()
+            throw BridgeException(BACKGROUND)
+        }
+    }
+
     private fun handleFor(alias: String): SeedHandle = synchronized(lock) {
         ensureOpen()
         checkedAlias(alias)
+        ensureForeground()
         expireIdle()
         held[alias]?.let { found ->
             touch(alias)
@@ -241,6 +252,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     private fun keep(alias: String, make: () -> SeedHandle) {
         synchronized(lock) {
             ensureOpen()
+            ensureForeground()
             if (store.has(checkedAlias(alias))) {
                 throw BridgeException("a seed is already stored under this alias, forget it first")
             }
@@ -774,6 +786,14 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
+    fun vaultStorageLevel(): String = guarded {
+        synchronized(lock) {
+            ensureOpen()
+            store.level()
+        }
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultHas(alias: String): String = guarded {
         synchronized(lock) {
             ensureOpen()
@@ -1199,6 +1219,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         private const val MAX_SESSIONS = 64
         private const val TOO_MANY_SESSIONS = "too many signing sessions are open, close one first"
         private const val CLOSED = "the vault module was shut down, so it serves no further vault call"
+        private const val BACKGROUND = "the vault is used only while the app is in the foreground, nothing was signed"
         private const val RESET_TITLE = "Reset nonce state"
         private const val RESET_CANCELLED = "authentication cancelled, the nonce state was not reset"
         private const val RESET_UNSUPPORTED = "resetting the nonce state needs a device lock"

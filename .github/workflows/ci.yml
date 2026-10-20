@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
+    name: test
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -20,10 +21,11 @@ jobs:
         with:
           path: react-native-qcore
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.98.0"
-          components: rustfmt, clippy
+      - name: rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.0
       - name: fmt
         working-directory: react-native-qcore
         run: cargo fmt --all -- --check
@@ -39,6 +41,7 @@ jobs:
           cargo install --locked cargo-deny --version 0.19.9
           cargo deny check bans licenses sources advisories
   secrets:
+    name: secrets
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

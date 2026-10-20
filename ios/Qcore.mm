@@ -130,6 +130,8 @@ RCT_EXTERN_METHOD(vaultAcknowledgeImportedHistory:(NSString *)alias
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultStorageLevel)
+
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultHas:(NSString *)alias)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultClose:(NSString *)alias)

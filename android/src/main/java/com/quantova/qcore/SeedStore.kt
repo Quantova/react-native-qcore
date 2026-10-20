@@ -6,6 +6,7 @@ package com.quantova.qcore
 import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
@@ -14,9 +15,11 @@ import android.util.AtomicFile
 import java.io.File
 import java.io.FileNotFoundException
 import java.security.KeyStore
+import java.security.ProviderException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 
 internal class SeedStoreException(message: String) : Exception(message)
@@ -74,6 +77,21 @@ internal class SeedStore(context: Context) {
         if (has(alias)) throw IllegalStateException("the sealed seed could not be removed")
     }
 
+    fun level(): String {
+        val key = key()
+        val info = SecretKeyFactory.getInstance(key.algorithm, KEYSTORE).getKeySpec(key, KeyInfo::class.java) as KeyInfo
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return when (info.securityLevel) {
+                KeyProperties.SECURITY_LEVEL_STRONGBOX -> "strongbox"
+                KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> "trusted-environment"
+                KeyProperties.SECURITY_LEVEL_SOFTWARE -> "software"
+                else -> "unknown"
+            }
+        }
+        @Suppress("DEPRECATION")
+        return if (info.isInsideSecureHardware) "secure-hardware" else "software"
+    }
+
     private inline fun authenticated(block: () -> Unit) {
         try {
             block()
@@ -91,7 +109,8 @@ internal class SeedStore(context: Context) {
         (keyStore.getKey(KEY_ALIAS, null) as? SecretKey) ?: run {
             try {
                 generate(strongBox = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
-            } catch (error: StrongBoxUnavailableException) {
+            } catch (error: ProviderException) {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || error !is StrongBoxUnavailableException) throw error
                 generate(strongBox = false)
             }
         }

@@ -188,6 +188,7 @@ interface QcoreNative {
   vaultRevealPhrase(alias: string, title: string, subtitle: string): Promise<string>;
   vaultResetNonceState(alias: string, chainId: string, genesisHex: string, key: string, title: string, subtitle: string): Promise<string>;
   vaultAcknowledgeImportedHistory(alias: string, chainId: string, genesisHex: string, key: string, title: string, subtitle: string): Promise<string>;
+  vaultStorageLevel(): string;
   vaultHas(alias: string): string;
   vaultClose(alias: string): string;
   vaultCloseAll(): string;
@@ -625,6 +626,7 @@ export interface SecureQCore {
     certificateHex: string,
     roster: readonly RosterMember[],
   ): Promise<SettleProgress>;
+  storageLevel(): StorageLevel;
   hasSeed(alias: string): boolean;
   closeSeed(alias: string): void;
   closeAll(): void;
@@ -704,6 +706,10 @@ export interface SecureQCore {
   ): Promise<string>;
 }
 
+const STORAGE_LEVELS = ['strongbox', 'trusted-environment', 'secure-hardware', 'software', 'keychain', 'unknown'] as const;
+
+export type StorageLevel = (typeof STORAGE_LEVELS)[number];
+
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 function sextet(code: number): number {
@@ -715,15 +721,21 @@ function sextet(code: number): number {
   return -1;
 }
 
-function toBase64(bytes: Uint8Array): string {
+function plainBytes(value: unknown, what: string): Uint8Array {
+  if (!(ArrayBuffer.isView(value) && value instanceof Uint8Array)) throw new Error(what + ' must be a Uint8Array');
+  return value;
+}
+
+function toBase64(input: Uint8Array, what: string): string {
+  const bytes = plainBytes(input, what);
   let out = '';
   for (let i = 0; i < bytes.length; i += 3) {
     const left = bytes.length - i;
-    const triple = (bytes[i] << 16) | ((left > 1 ? bytes[i + 1] : 0) << 8) | (left > 2 ? bytes[i + 2] : 0);
-    out += BASE64_ALPHABET[(triple >> 18) & 63];
-    out += BASE64_ALPHABET[(triple >> 12) & 63];
-    out += left > 1 ? BASE64_ALPHABET[(triple >> 6) & 63] : '=';
-    out += left > 2 ? BASE64_ALPHABET[triple & 63] : '=';
+    const triple = ((bytes[i] ?? 0) << 16) | ((left > 1 ? (bytes[i + 1] ?? 0) : 0) << 8) | (left > 2 ? (bytes[i + 2] ?? 0) : 0);
+    out += BASE64_ALPHABET.charAt((triple >> 18) & 63);
+    out += BASE64_ALPHABET.charAt((triple >> 12) & 63);
+    out += left > 1 ? BASE64_ALPHABET.charAt((triple >> 6) & 63) : '=';
+    out += left > 2 ? BASE64_ALPHABET.charAt(triple & 63) : '=';
   }
   return out;
 }
@@ -752,7 +764,7 @@ function fromBase64(text: string): Uint8Array {
 }
 
 export function wipeBytes(bytes: Uint8Array): void {
-  bytes.fill(0);
+  plainBytes(bytes, 'the bytes to wipe').fill(0);
 }
 
 export const secureQCore: SecureQCore = {
@@ -760,10 +772,10 @@ export const secureQCore: SecureQCore = {
     native.vaultCreate(alias);
   },
   importPhrase(alias: string, phrase: Uint8Array): void {
-    native.vaultImportPhrase(alias, toBase64(phrase));
+    native.vaultImportPhrase(alias, toBase64(phrase, 'the recovery phrase'));
   },
   importSeed(alias: string, seed: Uint8Array): void {
-    native.vaultImportSeed(alias, toBase64(seed));
+    native.vaultImportSeed(alias, toBase64(seed, 'the seed'));
   },
   async revealPhrase(alias: string, prompt: RevealPrompt = {}): Promise<Uint8Array> {
     const text = await native.vaultRevealPhrase(alias, prompt.title ?? '', prompt.subtitle ?? '');
@@ -809,6 +821,11 @@ export const secureQCore: SecureQCore = {
     );
     const progress = JSON.parse(text) as { settled: boolean; blocks_left: string; secs_left: string };
     return { settled: progress.settled === true, blocksLeft: BigInt(progress.blocks_left), secondsLeft: BigInt(progress.secs_left) };
+  },
+  storageLevel(): StorageLevel {
+    const level = native.vaultStorageLevel();
+    if (!(STORAGE_LEVELS as readonly string[]).includes(level)) throw new Error('the native layer returned an unknown storage level');
+    return level as StorageLevel;
   },
   hasSeed(alias: string): boolean {
     return native.vaultHas(alias) === 'true';

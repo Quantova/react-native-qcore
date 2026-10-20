@@ -3,7 +3,6 @@
 
 package com.quantova.qcore
 
-import android.annotation.TargetApi
 import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
@@ -16,9 +15,11 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
+import androidx.annotation.RequiresApi
 import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.ReactContext
 import java.security.KeyStore
+import java.security.ProviderException
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -166,7 +167,7 @@ internal class RevealGate(private val context: ReactContext) {
         generator.generateKey()
     }
 
-    @TargetApi(Build.VERSION_CODES.P)
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun prompt(
         activity: Activity,
         cipher: Cipher,
@@ -179,7 +180,7 @@ internal class RevealGate(private val context: ReactContext) {
         val builder = BiometricPrompt.Builder(activity).setTitle(title.ifEmpty { DEFAULT_TITLE })
         if (subtitle.isNotEmpty()) builder.setSubtitle(subtitle)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            builder.setAllowedAuthenticators(AUTHENTICATORS)
+            builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
         } else {
             builder.setNegativeButton(CANCEL_LABEL, executor) { _, _ ->
                 finish(SeedStoreException(cancelled))
@@ -210,6 +211,7 @@ internal class RevealGate(private val context: ReactContext) {
             SeedStoreException(SeedStore.AUTHENTICATION_REQUIRED)
         }
 
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun challenge(): Cipher {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         try {
@@ -225,18 +227,20 @@ internal class RevealGate(private val context: ReactContext) {
         KeyStore.getInstance(KEYSTORE).apply { load(null) }.deleteEntry(KEY_ALIAS)
     }
 
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun key(): SecretKey = synchronized(KeyLock) {
         val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
         (keyStore.getKey(KEY_ALIAS, null) as? SecretKey) ?: run {
             try {
                 generate(strongBox = true)
-            } catch (error: StrongBoxUnavailableException) {
+            } catch (error: ProviderException) {
+                if (error !is StrongBoxUnavailableException) throw error
                 generate(strongBox = false)
             }
         }
     }
 
-    @TargetApi(Build.VERSION_CODES.P)
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun generate(strongBox: Boolean): SecretKey {
         val builder = KeyGenParameterSpec.Builder(
             KEY_ALIAS,
@@ -282,7 +286,5 @@ internal class RevealGate(private val context: ReactContext) {
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val KEY_BITS = 256
         private const val CHALLENGE_BYTES = 32
-        private const val AUTHENTICATORS =
-            BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
     }
 }

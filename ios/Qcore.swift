@@ -47,6 +47,7 @@ class Qcore: NSObject {
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(hostLeftForeground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         center.addObserver(self, selector: #selector(hostLeftForeground), name: UIApplication.willResignActiveNotification, object: nil)
+        Keychain.removeSeedsFromEarlierInstall()
     }
 
     deinit {
@@ -225,6 +226,49 @@ class Qcore: NSObject {
 
     private enum Keychain {
         static let service = "com.quantova.qcore.seed.2"
+        static let installMarker = "com.quantova.qcore.install.1"
+
+        static func earlierInstall(created: Date, installed: Date) -> Bool {
+            return created < installed
+        }
+
+        static func removeSeedsFromEarlierInstall() {
+            let defaults = UserDefaults.standard
+            if defaults.bool(forKey: installMarker) { return }
+            guard let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first,
+                  let installed = (try? library.resourceValues(forKeys: [.creationDateKey]))?.creationDate else { return }
+            let context = LAContext()
+            context.interactionNotAllowed = true
+            defer { context.invalidate() }
+            let search: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecMatchLimit as String: kSecMatchLimitAll,
+                kSecReturnAttributes as String: true,
+                kSecUseAuthenticationContext as String: context,
+            ]
+            var found: CFTypeRef?
+            let status = SecItemCopyMatching(search as CFDictionary, &found)
+            if status == errSecItemNotFound {
+                defaults.set(true, forKey: installMarker)
+                return
+            }
+            guard status == errSecSuccess, let items = found as? [[String: Any]] else { return }
+            var cleared = true
+            for item in items {
+                guard let account = item[kSecAttrAccount as String] as? String,
+                      let created = item[kSecAttrCreationDate as String] as? Date else {
+                    cleared = false
+                    continue
+                }
+                if earlierInstall(created: created, installed: installed) {
+                    let removed = SecItemDelete(query(account) as CFDictionary)
+                    if removed != errSecSuccess && removed != errSecItemNotFound { cleared = false }
+                }
+            }
+            if cleared { defaults.set(true, forKey: installMarker) }
+        }
+
 
         static func query(_ alias: String) -> [String: Any] {
             return [
@@ -1393,6 +1437,14 @@ class Qcore: NSObject {
             var phrase = try handle.phraseBytes()
             defer { wipe(&phrase) }
             return phrase.base64EncodedString() as NSString
+        } catch { return failure(error) }
+    }
+
+    @objc(vaultStorageLevel)
+    func rnVaultStorageLevel() -> NSString {
+        do {
+            try ensureOpen()
+            return "keychain"
         } catch { return failure(error) }
     }
 

@@ -1,20 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-buildscript {
-    ext.getExtOrDefault = { name, fallback ->
-        rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback
-    }
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath "com.android.tools.build:gradle:8.6.0"
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${getExtOrDefault('kotlinVersion', '1.9.24')}"
-    }
-}
-
 apply plugin: "com.android.library"
 apply plugin: "org.jetbrains.kotlin.android"
 
@@ -55,6 +41,6 @@ repositories {
 
 dependencies {
     implementation "com.facebook.react:react-android"
-    implementation "net.java.dev.jna:jna:5.14.0@aar"
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:${qcoreConfig('kotlinVersion', '1.9.24')}"
+    implementation "net.java.dev.jna:jna:5.19.1@aar"
+    implementation "androidx.annotation:annotation:1.11.0"
 }

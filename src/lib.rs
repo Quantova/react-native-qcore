@@ -45,11 +45,29 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+fn strong(seed: &[u8]) -> Result<(), QcoreError> {
+    let mut seen = [false; 256];
+    let mut different = 0usize;
+    for b in seed {
+        if !seen[usize::from(*b)] {
+            seen[usize::from(*b)] = true;
+            different += 1;
+        }
+    }
+    if different < 13 {
+        return Err(err(
+            "a seed made of too few different byte values is refused, create a new wallet",
+        ));
+    }
+    Ok(())
+}
+
 fn parse_seed(seed: Vec<u8>) -> Result<Zeroizing<[u8; SEED_LEN]>, QcoreError> {
     let bytes = Zeroizing::new(seed);
     if bytes.len() != SEED_LEN {
         return Err(err("a seed is thirty two bytes"));
     }
+    strong(&bytes)?;
     let mut seed = Zeroizing::new([0u8; SEED_LEN]);
     seed.copy_from_slice(&bytes);
     Ok(seed)
@@ -69,6 +87,7 @@ fn fresh_seed() -> Result<Zeroizing<[u8; SEED_LEN]>, QcoreError> {
 fn seed_from_phrase(phrase: Vec<u8>) -> Result<Zeroizing<[u8; SEED_LEN]>, QcoreError> {
     let phrase = Zeroizing::new(phrase);
     let seed = qcore::seed_from_mnemonic_bytes(&phrase).map_err(err)?;
+    strong(&seed[..])?;
     Ok(held(&seed))
 }
 
@@ -5747,6 +5766,27 @@ mod tests {
             &"x".repeat(SEED_ALIAS_MAX + 1),
         ] {
             assert!(check_seed_alias(bad.to_string()).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_seed_of_too_few_different_bytes_is_refused_on_every_path() {
+        let cycle = |n: u8| -> Vec<u8> { (0..32u8).map(|i| 1 + i % n).collect() };
+        for weak in [vec![0u8; 32], vec![7u8; 32], cycle(2), cycle(12)] {
+            assert!(SeedHandle::from_seed_bytes(weak.clone()).is_err());
+            assert!(mnemonic_from_seed(weak.clone()).is_err());
+            let mut array = [0u8; SEED_LEN];
+            array.copy_from_slice(&weak);
+            let phrase = qcore::mnemonic_bytes_from_seed(&array).to_vec();
+            assert!(SeedHandle::from_phrase_bytes(phrase.clone()).is_err());
+            assert!(seed_from_mnemonic(phrase).is_err());
+        }
+        assert!(SeedHandle::from_seed_bytes(cycle(13)).is_ok());
+        for _ in 0..200 {
+            let seed = generate_seed().expect("seed");
+            assert!(SeedHandle::from_seed_bytes(seed.clone()).is_ok());
+            let phrase = mnemonic_from_seed(seed).expect("phrase");
+            assert!(SeedHandle::from_phrase_bytes(phrase).is_ok());
         }
     }
 }
