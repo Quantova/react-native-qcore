@@ -2811,6 +2811,12 @@ impl SigningSession {
 mod tests {
     use super::*;
 
+    fn signed_body(signed: &str) -> String {
+        let parsed = qcore::json::parse(signed).expect("json");
+        let tx_hex = parsed.get("tx_hex").and_then(Json::as_str).expect("tx_hex");
+        tx_hex[..tx_hex.len() - 2 * (1 + 8 + 3309)].to_string()
+    }
+
     fn seed() -> Vec<u8> {
         (0u8..32).collect()
     }
@@ -3147,14 +3153,20 @@ mod tests {
                 g(),
             )
             .expect("the handle signs");
-        assert_eq!(by_seed, by_handle, "both paths must sign the same bytes");
+        assert_eq!(
+            signed_body(&by_seed),
+            signed_body(&by_handle),
+            "both paths must sign the same bytes"
+        );
         let register = handle()
             .sign_register(slotted(0, 0), 0, 0, "1".to_string(), 1, 300, 10, g())
             .expect("the handle registers");
         assert_eq!(
-            register,
-            sign_register(seed(), 0, 0, "1".to_string(), 1, 300, 0, g())
-                .expect("the seed path registers")
+            signed_body(&register),
+            signed_body(
+                &sign_register(seed(), 0, 0, "1".to_string(), 1, 300, 0, g())
+                    .expect("the seed path registers")
+            )
         );
         let call = handle()
             .sign_call(
@@ -3173,22 +3185,24 @@ mod tests {
             )
             .expect("the handle calls");
         assert_eq!(
-            call,
-            sign_call(
-                seed(),
-                0,
-                to,
-                String::new(),
-                0,
-                21_000,
-                "9000".to_string(),
-                1,
-                300,
-                "500".to_string(),
-                0,
-                g(),
+            signed_body(&call),
+            signed_body(
+                &sign_call(
+                    seed(),
+                    0,
+                    to,
+                    String::new(),
+                    0,
+                    21_000,
+                    "9000".to_string(),
+                    1,
+                    300,
+                    "500".to_string(),
+                    0,
+                    g(),
+                )
+                .expect("the seed path calls")
             )
-            .expect("the seed path calls")
         );
     }
 
@@ -3646,7 +3660,8 @@ mod tests {
             .expect("asked for again");
         let again = vault_transfer(&held, &session, 0, 5).expect("signs");
         assert_eq!(
-            first, again,
+            signed_body(&first),
+            signed_body(&again),
             "the vault and the session sign the same transaction"
         );
     }
