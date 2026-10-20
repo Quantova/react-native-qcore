@@ -85,6 +85,11 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(signAssetCall:(NSString *)seedHex
                                         head:(NSString *)head
                                         genesisHex:(NSString *)genesisHex)
 
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(gatewayProtocol)
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(checkEndpoint:(NSString *)base)
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(testnetRpcUrl)
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(testnetChainName)
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(testnetGenesisHash)
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(chainIdFromName:(NSString *)name)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(nameKey:(NSString *)label)

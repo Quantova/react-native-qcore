@@ -433,6 +433,26 @@ pub fn gateway_protocol() -> u32 {
     qcore::GATEWAY_PROTOCOL
 }
 
+#[uniffi::export]
+pub fn check_endpoint(base: String) -> Result<(), QcoreError> {
+    qcore::check_endpoint(&base).map_err(err)
+}
+
+#[uniffi::export]
+pub fn testnet_rpc_url() -> String {
+    qcore::TESTNET_RPC_URL.to_string()
+}
+
+#[uniffi::export]
+pub fn testnet_chain_name() -> String {
+    qcore::TESTNET_CHAIN_NAME.to_string()
+}
+
+#[uniffi::export]
+pub fn testnet_genesis_hash() -> Option<String> {
+    qcore::TESTNET_GENESIS_HASH.map(|h| to_hex(&h))
+}
+
 fn parse_key32(hex: &str) -> Result<[u8; 32], QcoreError> {
     let bytes = from_hex(hex).map_err(err)?;
     if bytes.len() != 32 {
@@ -2894,6 +2914,22 @@ mod tests {
                 "a transfer to {bad:?} must return an error, not sign and not panic"
             );
         }
+    }
+
+    #[test]
+    fn the_retired_testnet_host_is_refused_and_the_served_one_accepted() {
+        assert_eq!(testnet_rpc_url(), "https://q-test-net-01.quantova.org");
+        assert_eq!(testnet_chain_name(), "Q-test-net-01");
+        assert!(check_endpoint(testnet_rpc_url()).is_ok());
+        for retired in [
+            "https://rpc-testnet.quantova.org",
+            "https://rpc-testnet.quantova.org/rpc",
+            "https://RPC-TESTNET.quantova.org.",
+            "https://user@rpc-testnet.quantova.org:443/v1",
+        ] {
+            assert!(check_endpoint(retired.to_string()).is_err(), "{retired}");
+        }
+        assert!(gateway_protocol() > 0);
     }
 
     #[test]

@@ -50,6 +50,12 @@ export interface QCore {
   ): string;
   chainIdFromName(name: string): bigint;
   gatewayProtocol(): number;
+  /** Refuses an endpoint the network has retired (throws). */
+  checkEndpoint(base: string): void;
+  testnetRpcUrl(): string;
+  testnetChainName(): string;
+  /** The genesis hash this core pins for the testnet, or null when it pins none. */
+  testnetGenesisHash(): string | null;
   boundedValidUntil(
     chainName: string,
     head: bigint,
@@ -147,6 +153,10 @@ interface QcoreNative {
   ): string;
   chainIdFromName(name: string): string;
   gatewayProtocol(): number;
+  checkEndpoint(base: string): string;
+  testnetRpcUrl(): string;
+  testnetChainName(): string;
+  testnetGenesisHash(): string;
   signPayableCall(
     seedHex: string,
     index: string,
@@ -489,7 +499,19 @@ export const nativeQCore: QCore = {
     return BigInt(native.chainIdFromName(name));
   },
   gatewayProtocol(): number {
-    return native.gatewayProtocol();
+    return Number(native.gatewayProtocol());
+  },
+  checkEndpoint(base: string): void {
+    native.checkEndpoint(base);
+  },
+  testnetRpcUrl(): string {
+    return native.testnetRpcUrl();
+  },
+  testnetChainName(): string {
+    return native.testnetChainName();
+  },
+  testnetGenesisHash(): string | null {
+    return native.testnetGenesisHash() || null;
   },
   boundedValidUntil(
     chainName: string,

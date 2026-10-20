@@ -3,7 +3,7 @@
 
 [package]
 name = "react-native-qcore"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 description = "The React Native binding for the Quantova post quantum client core, generated over QCore with uniffi so the QMask wallet derives keys and signs on device with no wasm."

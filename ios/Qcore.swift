@@ -1266,6 +1266,34 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
+    @objc(gatewayProtocol)
+    func rnGatewayProtocol() -> NSNumber {
+        return NSNumber(value: gatewayProtocol())
+    }
+
+    @objc(checkEndpoint:)
+    func rnCheckEndpoint(_ base: String) -> NSString {
+        do {
+            try checkEndpoint(base: base)
+            return ""
+        } catch { return failure(error) }
+    }
+
+    @objc(testnetRpcUrl)
+    func rnTestnetRpcUrl() -> NSString {
+        return testnetRpcUrl() as NSString
+    }
+
+    @objc(testnetChainName)
+    func rnTestnetChainName() -> NSString {
+        return testnetChainName() as NSString
+    }
+
+    @objc(testnetGenesisHash)
+    func rnTestnetGenesisHash() -> NSString {
+        return (testnetGenesisHash() ?? "") as NSString
+    }
+
     @objc(chainIdFromName:)
     func rnChainIdFromName(_ name: String) -> NSString {
         do {

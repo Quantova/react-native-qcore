@@ -530,6 +530,24 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
+    fun gatewayProtocol(): Double = uniffi.quantova_qcore.gatewayProtocol().toDouble()
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun checkEndpoint(base: String): String = guarded {
+        uniffi.quantova_qcore.checkEndpoint(base)
+        ""
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun testnetRpcUrl(): String = uniffi.quantova_qcore.testnetRpcUrl()
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun testnetChainName(): String = uniffi.quantova_qcore.testnetChainName()
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun testnetGenesisHash(): String = uniffi.quantova_qcore.testnetGenesisHash() ?: ""
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
     fun chainIdFromName(name: String): String = guarded {
         uniffi.quantova_qcore.chainIdFromName(name).toString()
     }
