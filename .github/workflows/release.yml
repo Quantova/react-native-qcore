@@ -243,14 +243,19 @@ jobs:
           set -euo pipefail
           V=$(node -p "require('./package.json').version")
           url=""
-          for _ in $(seq 1 30); do
+          for _ in $(seq 1 120); do
             url=$(npm view "$PKG@$V" dist.attestations.url 2>/dev/null || true)
             [ -n "$url" ] && break
             sleep 10
           done
           [ -n "$url" ] || { echo "$PKG@$V shows no provenance attestation" >&2; exit 1; }
           integrity=$(npm view "$PKG@$V" dist.integrity)
-          curl -sSf "$url" -o "$RUNNER_TEMP/attestations.json"
+          for _ in $(seq 1 40); do
+            curl -sSf "$url" -o "$RUNNER_TEMP/attestations.json" 2>/dev/null && break
+            rm -f "$RUNNER_TEMP/attestations.json"
+            sleep 15
+          done
+          [ -s "$RUNNER_TEMP/attestations.json" ] || { echo "$PKG@$V attestation bundle is not served" >&2; exit 1; }
           node - "$RUNNER_TEMP/attestations.json" "$integrity" "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF" "$WORKFLOW_PATH" <<'JS'
           'use strict';
           const fs = require('fs');
