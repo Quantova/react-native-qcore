@@ -3058,9 +3058,10 @@ mod tests {
     }
 
     #[test]
-    fn a_call_is_priced_by_its_meter_and_refused_outside_the_chain_rules() {
+    fn a_call_pays_the_one_locked_fee_and_is_refused_outside_the_chain_rules() {
         let to = address(seed(), 1).expect("derives");
-        assert_eq!(vm_call_fee("500".to_string(), 21_000).unwrap(), "9000");
+        assert_eq!(vm_call_fee("500".to_string(), 21_000).unwrap(), "500");
+        assert_eq!(vm_call_fee("500".to_string(), 12_500_000).unwrap(), "500");
         assert!(vm_call_fee("-1".to_string(), 21_000).is_err());
         let call = |meter: u64, fee: &str, args: &str| {
             sign_call(
@@ -3078,14 +3079,12 @@ mod tests {
                 g(),
             )
         };
-        assert!(call(21_000, "9000", "").is_ok());
-        assert!(
-            call(21_000, "500", "").is_err(),
-            "one transfer fee underpays a 21000 meter"
-        );
+        assert!(call(21_000, "500", "").is_ok());
+        assert!(call(21_000, "499", "").is_err(), "below the locked fee");
+        assert!(call(21_000, "9000", "").is_err(), "above the locked fee");
         assert!(call(1_209, "500", "").is_err());
-        assert!(call(12_500_001, "5170000", "").is_err());
-        assert!(call(21_000, "9000", &"00".repeat(128 * 1024 + 1)).is_err());
+        assert!(call(12_500_001, "500", "").is_err());
+        assert!(call(21_000, "500", &"00".repeat(128 * 1024 + 1)).is_err());
         assert!(sign_payable_call(
             seed(),
             0,
@@ -3093,7 +3092,7 @@ mod tests {
             String::new(),
             0,
             21_000,
-            "500".to_string(),
+            "499".to_string(),
             "0".to_string(),
             1,
             300,
@@ -3111,7 +3110,7 @@ mod tests {
             "1".to_string(),
             0,
             21_000,
-            "500".to_string(),
+            "499".to_string(),
             1,
             300,
             "500".to_string(),
@@ -3231,7 +3230,7 @@ mod tests {
                 String::new(),
                 0,
                 21_000,
-                "9000".to_string(),
+                "500".to_string(),
                 1,
                 300,
                 "500".to_string(),
@@ -3249,7 +3248,7 @@ mod tests {
                     String::new(),
                     0,
                     21_000,
-                    "9000".to_string(),
+                    "500".to_string(),
                     1,
                     300,
                     "500".to_string(),
@@ -3360,7 +3359,7 @@ mod tests {
                 String::new(),
                 0,
                 21_000,
-                "9000".to_string(),
+                "500".to_string(),
                 1,
                 valid_until,
                 "500".to_string(),
@@ -3376,7 +3375,7 @@ mod tests {
                 String::new(),
                 0,
                 21_000,
-                "9000".to_string(),
+                "500".to_string(),
                 "1".to_string(),
                 1,
                 valid_until,
@@ -3395,7 +3394,7 @@ mod tests {
                 "1".to_string(),
                 0,
                 21_000,
-                "9000".to_string(),
+                "500".to_string(),
                 1,
                 valid_until,
                 "500".to_string(),
