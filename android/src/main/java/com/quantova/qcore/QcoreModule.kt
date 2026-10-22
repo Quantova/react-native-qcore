@@ -1071,8 +1071,16 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun verifyFinality(chainId: String, genesisHex: String, headerHex: String, certificateHex: String, rosterJson: String): String = guarded {
-        uniffi.quantova_qcore.verifyFinality(u64(chainId, "chain id"), genesisHex, headerHex, certificateHex, rosterJson)
+    fun verifyFinality(chainId: String, genesisHex: String, epochLength: String, rosterEpoch: String, headerHex: String, certificateHex: String, rosterJson: String): String = guarded {
+        uniffi.quantova_qcore.verifyFinality(
+            u64(chainId, "chain id"),
+            genesisHex,
+            optionalU64(epochLength, "epoch length"),
+            u64(rosterEpoch, "roster epoch"),
+            headerHex,
+            certificateHex,
+            rosterJson,
+        )
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -1089,12 +1097,46 @@ class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     fun confirmTransaction(
         chainId: String,
         genesisHex: String,
+        epochLength: String,
+        rosterEpoch: String,
         txId: String,
         proofJson: String,
         finalityJson: String,
         rosterJson: String,
     ): String = guarded {
-        uniffi.quantova_qcore.confirmTransaction(u64(chainId, "chain id"), genesisHex, txId, proofJson, finalityJson, rosterJson)
+        uniffi.quantova_qcore.confirmTransaction(
+            u64(chainId, "chain id"),
+            genesisHex,
+            optionalU64(epochLength, "epoch length"),
+            u64(rosterEpoch, "roster epoch"),
+            txId,
+            proofJson,
+            finalityJson,
+            rosterJson,
+        )
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun confirmInclusion(
+        chainId: String,
+        genesisHex: String,
+        epochLength: String,
+        rosterEpoch: String,
+        txId: String,
+        proofJson: String,
+        finalityJson: String,
+        rosterJson: String,
+    ): String = guarded {
+        uniffi.quantova_qcore.confirmInclusion(
+            u64(chainId, "chain id"),
+            genesisHex,
+            optionalU64(epochLength, "epoch length"),
+            u64(rosterEpoch, "roster epoch"),
+            txId,
+            proofJson,
+            finalityJson,
+            rosterJson,
+        )
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)

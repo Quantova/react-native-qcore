@@ -99,10 +99,11 @@ export interface QCore {
   mapAddrWordKey(mapDomainTag: bigint, key32Hex: string, word: bigint): string;
   scalarSlotKey(slot: bigint): string;
   checkOrderExpiry(expiry: bigint, nowSecs: bigint): void;
-  verifyFinality(chainId: bigint, genesisHash: string, headerHex: string, certificateHex: string, rosterJson: string): string;
+  verifyFinality(chainId: bigint, genesisHash: string, headerHex: string, certificateHex: string, rosterJson: string, rosterEpoch?: bigint, epochLength?: bigint): string;
   verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): boolean;
   verifyTransaction(transactionRootHex: string, txId: string, leafHex: string, stepsJson: string): boolean;
-  confirmTransaction(chainId: bigint, genesisHash: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
+  confirmTransaction(chainId: bigint, genesisHash: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string, rosterEpoch?: bigint, epochLength?: bigint): string;
+  confirmInclusion(chainId: bigint, genesisHash: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string, rosterEpoch?: bigint, epochLength?: bigint): string;
   decodeEvent(leafHex: string): string;
 }
 
@@ -292,10 +293,11 @@ interface QcoreNative {
   defaultValidityBlocks(): string;
   checkOrderExpiry(expiry: string, nowSecs: string): string;
   maxOrderLifetimeSecs(): string;
-  verifyFinality(chainId: string, genesisHex: string, headerHex: string, certificateHex: string, rosterJson: string): string;
+  verifyFinality(chainId: string, genesisHex: string, epochLength: string, rosterEpoch: string, headerHex: string, certificateHex: string, rosterJson: string): string;
   verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): string;
   verifyTransaction(transactionRootHex: string, txId: string, leafHex: string, stepsJson: string): string;
-  confirmTransaction(chainId: string, genesisHex: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
+  confirmTransaction(chainId: string, genesisHex: string, epochLength: string, rosterEpoch: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
+  confirmInclusion(chainId: string, genesisHex: string, epochLength: string, rosterEpoch: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string;
   decodeEvent(leafHex: string): string;
   sessionOpen(addressBook: string): string;
   sessionClose(id: string): string;
@@ -380,6 +382,8 @@ function resolveNative(): QcoreNative {
 const native = resolveNative();
 
 const u64 = (value: bigint): string => value.toString(10);
+
+const epochText = (value: bigint | undefined): string => (value === undefined ? '' : u64(value));
 
 const genesis = (hash: string): string => {
   if (typeof hash !== 'string' || !/^[0-9a-fA-F]{64}$/.test(hash)) {
@@ -603,8 +607,8 @@ export const nativeQCore: QCore = {
   checkOrderExpiry(expiry: bigint, nowSecs: bigint): void {
     native.checkOrderExpiry(u64(expiry), u64(nowSecs));
   },
-  verifyFinality(chainId: bigint, genesisHash: string, headerHex: string, certificateHex: string, rosterJson: string): string {
-    return native.verifyFinality(u64(chainId), genesis(genesisHash), headerHex, certificateHex, rosterJson);
+  verifyFinality(chainId: bigint, genesisHash: string, headerHex: string, certificateHex: string, rosterJson: string, rosterEpoch: bigint = 0n, epochLength?: bigint): string {
+    return native.verifyFinality(u64(chainId), genesis(genesisHash), epochText(epochLength), u64(rosterEpoch), headerHex, certificateHex, rosterJson);
   },
   verifyEvent(eventRootHex: string, leafHex: string, stepsJson: string): boolean {
     return verdict(native.verifyEvent(eventRootHex, leafHex, stepsJson));
@@ -612,8 +616,11 @@ export const nativeQCore: QCore = {
   verifyTransaction(transactionRootHex: string, txId: string, leafHex: string, stepsJson: string): boolean {
     return verdict(native.verifyTransaction(transactionRootHex, txId, leafHex, stepsJson));
   },
-  confirmTransaction(chainId: bigint, genesisHash: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string): string {
-    return native.confirmTransaction(u64(chainId), genesis(genesisHash), txId, proofJson, finalityJson, rosterJson);
+  confirmTransaction(chainId: bigint, genesisHash: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string, rosterEpoch: bigint = 0n, epochLength?: bigint): string {
+    return native.confirmTransaction(u64(chainId), genesis(genesisHash), epochText(epochLength), u64(rosterEpoch), txId, proofJson, finalityJson, rosterJson);
+  },
+  confirmInclusion(chainId: bigint, genesisHash: string, txId: string, proofJson: string, finalityJson: string, rosterJson: string, rosterEpoch: bigint = 0n, epochLength?: bigint): string {
+    return native.confirmInclusion(u64(chainId), genesis(genesisHash), epochText(epochLength), u64(rosterEpoch), txId, proofJson, finalityJson, rosterJson);
   },
   decodeEvent(leafHex: string): string {
     return native.decodeEvent(leafHex);
@@ -1099,10 +1106,14 @@ export function verifyFinality(
   headerHex: string,
   certificateHex: string,
   roster: readonly RosterMember[],
+  rosterEpoch: bigint = 0n,
+  epochLength?: bigint,
 ): FinalizedHeader {
   const pinned = genesis(genesisHash);
   const members = roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk, root: m.root, root_slots: m.root_slots }));
-  return JSON.parse(native.verifyFinality(u64(chainId), pinned, headerHex, certificateHex, JSON.stringify(members))) as FinalizedHeader;
+  return JSON.parse(
+    native.verifyFinality(u64(chainId), pinned, epochText(epochLength), u64(rosterEpoch), headerHex, certificateHex, JSON.stringify(members)),
+  ) as FinalizedHeader;
 }
 
 export function verifyEvent(eventRootHex: string, leafHex: string, steps: readonly ProofStep[]): boolean {
@@ -1136,16 +1147,21 @@ export interface ConfirmedTransaction {
   txId: string;
   height: bigint;
   index: bigint;
+  kind: 'transfer' | 'call';
+  outcome: 'applied' | 'included-outcome-unproven';
   header: FinalizedHeader;
 }
 
-export function confirmTransaction(
+function proven(
+  inclusionOnly: boolean,
   chainId: bigint,
   genesisHash: string,
   txId: string,
   proof: TransactionProof | string,
   finality: FinalityAnswer | string,
   roster: readonly RosterMember[] | string,
+  rosterEpoch: bigint,
+  epochLength: bigint | undefined,
 ): ConfirmedTransaction {
   const pinned = genesis(genesisHash);
   if (typeof txId !== 'string') throw new Error('the transaction id must be a string');
@@ -1166,11 +1182,49 @@ export function confirmTransaction(
     typeof roster === 'string'
       ? roster
       : JSON.stringify(roster.map((m) => ({ id: m.id, stake: m.stake, attest_pk: m.attest_pk, root: m.root, root_slots: m.root_slots })));
+  const call = inclusionOnly ? native.confirmInclusion : native.confirmTransaction;
   const confirmed = JSON.parse(
-    native.confirmTransaction(u64(chainId), pinned, txId, proofJson, finalityJson, rosterJson),
-  ) as { tx_id: string; height: string; index: string; header: FinalizedHeader };
+    call(u64(chainId), pinned, epochText(epochLength), u64(rosterEpoch), txId, proofJson, finalityJson, rosterJson),
+  ) as { tx_id: string; height: string; index: string; kind: string; outcome: string; header: FinalizedHeader };
   if (confirmed.tx_id !== txId) throw new Error('the native layer confirmed a different transaction');
-  return { txId: confirmed.tx_id, height: BigInt(confirmed.height), index: BigInt(confirmed.index), header: confirmed.header };
+  if (confirmed.kind !== 'transfer' && confirmed.kind !== 'call') throw new Error('the native layer returned an unknown transaction kind');
+  if (confirmed.outcome !== 'applied' && confirmed.outcome !== 'included-outcome-unproven') {
+    throw new Error('the native layer returned an unknown outcome');
+  }
+  return {
+    txId: confirmed.tx_id,
+    height: BigInt(confirmed.height),
+    index: BigInt(confirmed.index),
+    kind: confirmed.kind,
+    outcome: confirmed.outcome,
+    header: confirmed.header,
+  };
+}
+
+export function confirmTransaction(
+  chainId: bigint,
+  genesisHash: string,
+  txId: string,
+  proof: TransactionProof | string,
+  finality: FinalityAnswer | string,
+  roster: readonly RosterMember[] | string,
+  rosterEpoch: bigint = 0n,
+  epochLength?: bigint,
+): ConfirmedTransaction {
+  return proven(false, chainId, genesisHash, txId, proof, finality, roster, rosterEpoch, epochLength);
+}
+
+export function confirmInclusion(
+  chainId: bigint,
+  genesisHash: string,
+  txId: string,
+  proof: TransactionProof | string,
+  finality: FinalityAnswer | string,
+  roster: readonly RosterMember[] | string,
+  rosterEpoch: bigint = 0n,
+  epochLength?: bigint,
+): ConfirmedTransaction {
+  return proven(true, chainId, genesisHash, txId, proof, finality, roster, rosterEpoch, epochLength);
 }
 
 export function decodeEvent(leafHex: string): ChainEvent {

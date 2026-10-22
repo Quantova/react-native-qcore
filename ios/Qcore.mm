@@ -270,6 +270,8 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(maxOrderLifetimeSecs)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(verifyFinality:(NSString *)chainId
                                         genesisHex:(NSString *)genesisHex
+                                        epochLength:(NSString *)epochLength
+                                        rosterEpoch:(NSString *)rosterEpoch
                                         headerHex:(NSString *)headerHex
                                         certificateHex:(NSString *)certificateHex
                                         rosterJson:(NSString *)rosterJson)
@@ -285,10 +287,21 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(verifyTransaction:(NSString *)transactio
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(confirmTransaction:(NSString *)chainId
                                         genesisHex:(NSString *)genesisHex
+                                        epochLength:(NSString *)epochLength
+                                        rosterEpoch:(NSString *)rosterEpoch
                                         txId:(NSString *)txId
                                         proofJson:(NSString *)proofJson
                                         finalityJson:(NSString *)finalityJson
                                         rosterJson:(NSString *)rosterJson)
+
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(confirmInclusion:(NSString *)chainId
+                                        genesisHex:(NSString *)genesisHex
+                                        epochLength:(NSString *)epochLength
+                                        rosterEpoch:(NSString *)rosterEpoch
+                                        txId:(NSString *)txId
+                                        proofJson:(NSString *)proofJson
+                                        finalityJson:(NSString *)finalityJson
+                                        rosterJson:(NSString *)rosterJson)rosterJson)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(decodeEvent:(NSString *)leafHex)
 

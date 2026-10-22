@@ -1987,12 +1987,14 @@ class Qcore: NSObject {
         return String(maxOrderLifetimeSecs()) as NSString
     }
 
-    @objc(verifyFinality:genesisHex:headerHex:certificateHex:rosterJson:)
-    func rnVerifyFinality(_ chainId: String, genesisHex: String, headerHex: String, certificateHex: String, rosterJson: String) -> NSString {
+    @objc(verifyFinality:genesisHex:epochLength:rosterEpoch:headerHex:certificateHex:rosterJson:)
+    func rnVerifyFinality(_ chainId: String, genesisHex: String, epochLength: String, rosterEpoch: String, headerHex: String, certificateHex: String, rosterJson: String) -> NSString {
         do {
             return try verifyFinality(
                 chainId: try u64(chainId, "chain id"),
                 genesisHex: genesisHex,
+                epochLength: try optionalU64(epochLength, "epoch length"),
+                rosterEpoch: try u64(rosterEpoch, "roster epoch"),
                 headerHex: headerHex,
                 certificateHex: certificateHex,
                 rosterJson: rosterJson
@@ -2019,10 +2021,12 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
-    @objc(confirmTransaction:genesisHex:txId:proofJson:finalityJson:rosterJson:)
+    @objc(confirmTransaction:genesisHex:epochLength:rosterEpoch:txId:proofJson:finalityJson:rosterJson:)
     func rnConfirmTransaction(
         _ chainId: String,
         genesisHex: String,
+        epochLength: String,
+        rosterEpoch: String,
         txId: String,
         proofJson: String,
         finalityJson: String,
@@ -2032,6 +2036,33 @@ class Qcore: NSObject {
             return try confirmTransaction(
                 chainId: try u64(chainId, "chain id"),
                 genesisHex: genesisHex,
+                epochLength: try optionalU64(epochLength, "epoch length"),
+                rosterEpoch: try u64(rosterEpoch, "roster epoch"),
+                txId: txId,
+                proofJson: proofJson,
+                finalityJson: finalityJson,
+                rosterJson: rosterJson
+            ) as NSString
+        } catch { return failure(error) }
+    }
+
+    @objc(confirmInclusion:genesisHex:epochLength:rosterEpoch:txId:proofJson:finalityJson:rosterJson:)
+    func rnConfirmInclusion(
+        _ chainId: String,
+        genesisHex: String,
+        epochLength: String,
+        rosterEpoch: String,
+        txId: String,
+        proofJson: String,
+        finalityJson: String,
+        rosterJson: String
+    ) -> NSString {
+        do {
+            return try confirmInclusion(
+                chainId: try u64(chainId, "chain id"),
+                genesisHex: genesisHex,
+                epochLength: try optionalU64(epochLength, "epoch length"),
+                rosterEpoch: try u64(rosterEpoch, "roster epoch"),
                 txId: txId,
                 proofJson: proofJson,
                 finalityJson: finalityJson,
