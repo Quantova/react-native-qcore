@@ -230,9 +230,9 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
+      - name: npm with trusted publishing
+        run: npm install --global --ignore-scripts npm@11.6.2
       - name: publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish ./pkg/*.tgz --provenance --access public --ignore-scripts
       - name: the published version must carry provenance for this tag and commit
         working-directory: react-native-qcore
