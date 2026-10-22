@@ -11,7 +11,7 @@ Pod::Spec.new do |s|
   s.summary      = package["description"]
   s.homepage     = "https://github.com/Quantova/react-native-qcore"
   s.license      = { :type => "Apache-2.0 OR MIT" }
-  s.authors      = { "Quantova Inc" => "engineering@quantova.com" }
+  s.authors      = { "Quantova Inc" => "security@quantova.org" }
   s.platforms    = { :ios => "13.0" }
   s.source       = { :git => "https://github.com/Quantova/react-native-qcore.git", :tag => "v#{s.version}" }
 
