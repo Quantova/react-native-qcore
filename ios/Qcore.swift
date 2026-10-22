@@ -22,86 +22,58 @@ class Qcore: NSObject {
 
     private let lock = NSLock()
 
-    private var held: [String: SeedHandle] = [:]
-
-    private var heldAt: [String: TimeInterval] = [:]
-
-    private static let idleSeconds: TimeInterval = 120
-
     private static let maxSessions = 64
+
+    private static let maxLearnedAddresses: UInt64 = 64
+
+    private static let preloadedAddresses: UInt64 = 8
+
+    private static let maxSecretBytes = 4096
 
     private static let tooManySessions = "too many signing sessions are open, close one first"
 
     private static let closedMessage = "the vault module was shut down, so it serves no further vault call"
 
+    private static let backgroundMessage = "the vault is used only while the app is in the foreground, nothing was signed"
+
+    private static let declinedMessage = "authentication cancelled, nothing was signed"
+
     private static let nonceLock = NSLock()
 
     private var closed = false
 
-    private let idleQueue = DispatchQueue(label: "com.quantova.qcore.idle")
-
-    private var idleTimer: DispatchSourceTimer?
+    private var active = false
 
     override init() {
         super.init()
         let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(hostBecameActive), name: UIApplication.didBecomeActiveNotification, object: nil)
         center.addObserver(self, selector: #selector(hostLeftForeground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         center.addObserver(self, selector: #selector(hostLeftForeground), name: UIApplication.willResignActiveNotification, object: nil)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let state = UIApplication.shared.applicationState == .active
+            self.locked { self.active = state }
+        }
         Keychain.removeSeedsFromEarlierInstall()
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        idleTimer?.cancel()
+    }
+
+    @objc private func hostBecameActive() {
+        locked { active = true }
     }
 
     @objc private func hostLeftForeground() {
-        locked { forgetHeld() }
+        locked { active = false }
     }
 
-    private func expireIdle() {
-        let now = ProcessInfo.processInfo.systemUptime
-        for (alias, at) in heldAt where now - at >= Self.idleSeconds {
-            held.removeValue(forKey: alias)?.forget()
-            heldAt.removeValue(forKey: alias)
+    private func ensureForeground() throws {
+        if !locked({ active }) {
+            throw BridgeError(message: Self.backgroundMessage)
         }
-        armIdleTimer(now)
-    }
-
-    private func armIdleTimer(_ now: TimeInterval) {
-        idleTimer?.cancel()
-        idleTimer = nil
-        guard let oldest = heldAt.values.min() else { return }
-        let timer = DispatchSource.makeTimerSource(queue: idleQueue)
-        timer.schedule(deadline: .now() + max(0, oldest + Self.idleSeconds - now))
-        timer.setEventHandler { [weak self] in
-            guard let self = self else { return }
-            self.locked { self.expireIdle() }
-        }
-        idleTimer = timer
-        timer.resume()
-    }
-
-    private func touch(_ alias: String) {
-        let now = ProcessInfo.processInfo.systemUptime
-        heldAt[alias] = now
-        armIdleTimer(now)
-    }
-
-    private func drop(_ alias: String) {
-        held.removeValue(forKey: alias)?.forget()
-        heldAt.removeValue(forKey: alias)
-        armIdleTimer(ProcessInfo.processInfo.systemUptime)
-    }
-
-    private func forgetHeld() {
-        idleTimer?.cancel()
-        idleTimer = nil
-        for handle in held.values {
-            handle.forget()
-        }
-        held.removeAll()
-        heldAt.removeAll()
     }
 
     private var sessions: [String: SigningSession] = [:]
@@ -200,11 +172,20 @@ class Qcore: NSObject {
         return String(decoding: chars, as: UTF8.self)
     }
 
-    private func base64Data(_ text: String, _ label: String) throws -> Data {
-        guard let decoded = Data(base64Encoded: text) else {
-            throw BridgeError(message: "the \(label) is not base64")
+    private func byteData(_ values: [NSNumber], _ label: String) throws -> Data {
+        guard values.count <= Self.maxSecretBytes else {
+            throw BridgeError(message: "the \(label) is too long")
         }
-        return decoded
+        var out = Data(count: values.count)
+        for (i, value) in values.enumerated() {
+            let number = value.doubleValue
+            guard number >= 0, number <= 255, number == number.rounded() else {
+                wipe(&out)
+                throw BridgeError(message: "the \(label) is not a list of byte values")
+            }
+            out[i] = UInt8(number)
+        }
+        return out
     }
 
     private func withSeedHex<T>(_ seedHex: String, _ body: (Data) throws -> T) throws -> T {
@@ -340,6 +321,65 @@ class Qcore: NSObject {
             let status = SecItemDelete(query(alias) as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else {
                 throw BridgeError(message: "the keychain refused to remove the seed with status \(status)")
+            }
+        }
+    }
+
+    private enum AddressBook {
+        static let service = "com.quantova.qcore.addresses.1"
+
+        static func query(_ alias: String) -> [String: Any] {
+            return [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: alias,
+            ]
+        }
+
+        static func read(_ alias: String) throws -> [UInt64: String] {
+            var search = query(alias)
+            search[kSecReturnData as String] = true
+            search[kSecMatchLimit as String] = kSecMatchLimitOne
+            var found: CFTypeRef?
+            let status = SecItemCopyMatching(search as CFDictionary, &found)
+            if status == errSecItemNotFound { return [:] }
+            guard status == errSecSuccess, let data = found as? Data else {
+                throw BridgeError(message: "the keychain refused to read the wallet addresses with status \(status)")
+            }
+            var out: [UInt64: String] = [:]
+            for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+                let parts = line.split(separator: " ")
+                if parts.count == 2, let index = UInt64(parts[0]) {
+                    out[index] = String(parts[1])
+                }
+            }
+            return out
+        }
+
+        static func remember(_ alias: String, _ found: [UInt64: String]) throws {
+            var all = try read(alias)
+            if found.allSatisfy({ all[$0.key] == $0.value }) { return }
+            all.merge(found) { _, new in new }
+            let text = all.keys.sorted().map { "\($0) \(all[$0] ?? "")" }.joined(separator: "\n")
+            let data = Data(text.utf8)
+            let status = SecItemUpdate(query(alias) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            if status == errSecItemNotFound {
+                var item = query(alias)
+                item[kSecValueData as String] = data
+                item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+                let added = SecItemAdd(item as CFDictionary, nil)
+                guard added == errSecSuccess else {
+                    throw BridgeError(message: "the keychain refused to store the wallet addresses with status \(added)")
+                }
+            } else if status != errSecSuccess {
+                throw BridgeError(message: "the keychain refused to store the wallet addresses with status \(status)")
+            }
+        }
+
+        static func remove(_ alias: String) throws {
+            let status = SecItemDelete(query(alias) as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw BridgeError(message: "the keychain refused to remove the wallet addresses with status \(status)")
             }
         }
     }
@@ -924,12 +964,6 @@ class Qcore: NSObject {
         return try nonceAccount(chainId: try u64(chainId, "chain id"), genesisHex: genesisHex, key: key)
     }
 
-    private func signer(_ alias: String, _ index: String, _ chainId: String, _ genesisHex: String) throws -> (SeedHandle, String) {
-        let handle = try handleFor(alias)
-        let address = try handle.address(index: try u64(index, "index"))
-        return (handle, try nonceAccount(chainId: try u64(chainId, "chain id"), genesisHex: genesisHex, key: address))
-    }
-
     private func resetTarget(_ chainId: String, _ genesisHex: String, _ key: String) throws -> (UInt64, String, String)? {
         if chainId.isEmpty && genesisHex.isEmpty && key.isEmpty {
             return nil
@@ -957,61 +991,114 @@ class Qcore: NSObject {
         }
     }
 
-    private func handleFor(_ alias: String) throws -> SeedHandle {
-        let alias = try checkedAlias(alias)
-        let found: SeedHandle? = try locked {
-            if closed {
-                throw BridgeError(message: Self.closedMessage)
-            }
-            expireIdle()
-            guard let found = held[alias] else { return nil }
-            touch(alias)
-            return found
+    private final class Decision {
+        var approved = false
+    }
+
+    private static func topController() -> UIViewController? {
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+        var top = (windows.first { $0.isKeyWindow } ?? windows.first)?.rootViewController
+        while let presented = top?.presentedViewController {
+            top = presented
         }
-        if let found = found {
-            return found
+        return top
+    }
+
+    private func confirmNatively(_ title: String, _ message: String) throws {
+        if Thread.isMainThread {
+            throw BridgeError(message: "the vault asks the user from a background thread only, nothing was signed")
         }
-        var seed = try Keychain.load(alias)
-        defer { wipe(&seed) }
-        let handle = try SeedHandle.fromSeedBytes(seed: seed)
-        return try locked {
-            if closed {
-                handle.forget()
-                throw BridgeError(message: Self.closedMessage)
+        let decided = DispatchSemaphore(value: 0)
+        let decision = Decision()
+        DispatchQueue.main.async {
+            guard let top = Self.topController() else {
+                decided.signal()
+                return
             }
-            if let raced = held[alias] {
-                handle.forget()
-                touch(alias)
-                return raced
-            }
-            held[alias] = handle
-            touch(alias)
-            return handle
+            let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+                decided.signal()
+            })
+            alert.addAction(UIAlertAction(title: "Approve", style: .default) { _ in
+                decision.approved = true
+                decided.signal()
+            })
+            top.present(alert, animated: true)
+        }
+        decided.wait()
+        if !decision.approved {
+            throw BridgeError(message: Self.declinedMessage)
         }
     }
 
-    private func keep(_ alias: String, _ make: () throws -> SeedHandle) throws {
-        try locked {
-            if closed {
-                throw BridgeError(message: Self.closedMessage)
-            }
-            let alias = try checkedAlias(alias)
-            if try Keychain.has(alias) {
-                throw BridgeError(message: "a seed is already stored under this alias, forget it first")
-            }
-            let handle = try make()
-            do {
-                var seed = try handle.seedBytes()
-                defer { wipe(&seed) }
-                try Keychain.save(alias, seed)
-            } catch {
-                handle.forget()
-                throw error
-            }
-            held[alias]?.forget()
-            held[alias] = handle
-            touch(alias)
+    private func gateReason(_ title: String, _ summary: String, _ extra: String) -> String {
+        return [title, summary, extra].filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    private func unlocked<T>(_ alias: String, title: String, summary: String, extra: String, confirm: Bool, _ body: (SeedHandle) throws -> T) throws -> T {
+        try ensureOpen()
+        let alias = try checkedAlias(alias)
+        try ensureForeground()
+        if confirm {
+            try confirmNatively(title, [summary, extra].filter { !$0.isEmpty }.joined(separator: "\n"))
         }
+        let context = LAContext()
+        context.touchIDAuthenticationAllowableReuseDuration = 0
+        context.localizedReason = gateReason(title, summary, extra)
+        defer { context.invalidate() }
+        var seed = try Keychain.load(alias, context: context)
+        defer { wipe(&seed) }
+        let handle = try SeedHandle.fromSeedBytes(seed: seed)
+        defer { handle.forget() }
+        try ensureOpen()
+        return try body(handle)
+    }
+
+    private func learn(_ alias: String, _ handle: SeedHandle, from: UInt64, count: UInt64) throws {
+        var found: [UInt64: String] = [:]
+        for index in from..<(from + count) {
+            found[index] = try handle.address(index: index)
+        }
+        try locked { try AddressBook.remember(alias, found) }
+    }
+
+    private func keep(_ alias: String, _ make: () throws -> SeedHandle) throws {
+        try ensureOpen()
+        let alias = try checkedAlias(alias)
+        try ensureForeground()
+        let handle = try make()
+        defer { handle.forget() }
+        var seed = try handle.seedBytes()
+        defer { wipe(&seed) }
+        try Keychain.save(alias, seed)
+        try learn(alias, handle, from: 0, count: Self.preloadedAddresses)
+    }
+
+    private func vaultSigned(
+        _ alias: String,
+        sessionId: String,
+        index: String,
+        chainId: String,
+        genesisHex: String,
+        summary: () throws -> String,
+        _ sign: (SeedHandle, SigningSession) throws -> String
+    ) -> NSString {
+        do {
+            let session = try session(sessionId)
+            let at = try u64(index, "index")
+            let chain = try u64(chainId, "chain id")
+            _ = try nonceAccount(chainId: chain, genesisHex: genesisHex, key: "vault")
+            let shown = try summary()
+            return try unlocked(alias, title: "Approve transaction", summary: shown, extra: "", confirm: true) { handle in
+                let address = try handle.address(index: at)
+                try learn(alias, handle, from: at, count: 1)
+                return try recorded(try nonceAccount(chainId: chain, genesisHex: genesisHex, key: address)) {
+                    try sign(handle, session)
+                } as NSString
+            }
+        } catch { return failure(error) }
     }
 
     private func session(_ id: String) throws -> SigningSession {
@@ -1026,7 +1113,6 @@ class Qcore: NSObject {
         NotificationCenter.default.removeObserver(self)
         locked {
             closed = true
-            forgetHeld()
             sessions.removeAll()
         }
     }
@@ -1334,36 +1420,56 @@ class Qcore: NSObject {
         } catch { return failure(error) }
     }
 
-    @objc(vaultCreate:)
-    func rnVaultCreate(_ alias: String) -> NSString {
-        do {
-            try keep(alias) { try SeedHandle.generate() }
-            return ""
-        } catch { return failure(error) }
+    @objc(vaultCreate:resolver:rejecter:)
+    func rnVaultCreate(
+        _ alias: String,
+        resolver resolve: @escaping (Any?) -> Void,
+        rejecter reject: @escaping (String?, String?, Error?) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try self.keep(alias) { try SeedHandle.generate() }
+                resolve("")
+            } catch { resolve(self.failure(error)) }
+        }
     }
 
-    @objc(vaultImportPhrase:phraseBase64:)
-    func rnVaultImportPhrase(_ alias: String, phraseBase64: String) -> NSString {
-        do {
-            try keep(alias) {
-                var phrase = try base64Data(phraseBase64, "phrase")
-                defer { wipe(&phrase) }
-                return try SeedHandle.fromPhraseBytes(phrase: phrase)
-            }
-            return ""
-        } catch { return failure(error) }
+    @objc(vaultImportPhrase:phrase:resolver:rejecter:)
+    func rnVaultImportPhrase(
+        _ alias: String,
+        phrase: [NSNumber],
+        resolver resolve: @escaping (Any?) -> Void,
+        rejecter reject: @escaping (String?, String?, Error?) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try self.keep(alias) {
+                    var bytes = try self.byteData(phrase, "phrase")
+                    defer { self.wipe(&bytes) }
+                    return try SeedHandle.fromPhraseBytes(phrase: bytes)
+                }
+                resolve("")
+            } catch { resolve(self.failure(error)) }
+        }
     }
 
-    @objc(vaultImportSeed:seedBase64:)
-    func rnVaultImportSeed(_ alias: String, seedBase64: String) -> NSString {
-        do {
-            try keep(alias) {
-                var seed = try base64Data(seedBase64, "seed")
-                defer { wipe(&seed) }
-                return try SeedHandle.fromSeedBytes(seed: seed)
-            }
-            return ""
-        } catch { return failure(error) }
+    @objc(vaultImportSeed:seed:resolver:rejecter:)
+    func rnVaultImportSeed(
+        _ alias: String,
+        seed: [NSNumber],
+        resolver resolve: @escaping (Any?) -> Void,
+        rejecter reject: @escaping (String?, String?, Error?) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try self.keep(alias) {
+                    var bytes = try self.byteData(seed, "seed")
+                    defer { self.wipe(&bytes) }
+                    return try SeedHandle.fromSeedBytes(seed: bytes)
+                }
+                resolve("")
+            } catch { resolve(self.failure(error)) }
+        }
     }
 
     @objc(vaultRevealPhrase:title:subtitle:resolver:rejecter:)
@@ -1375,7 +1481,36 @@ class Qcore: NSObject {
         rejecter reject: @escaping (String?, String?, Error?) -> Void
     ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            resolve(self.revealNow(alias, title: title, subtitle: subtitle))
+            do {
+                let extra = [title, subtitle].filter { !$0.isEmpty }.joined(separator: "\n")
+                let phrase: [NSNumber] = try self.unlocked(alias, title: "Reveal recovery phrase", summary: "Show the recovery phrase of this wallet on screen", extra: extra, confirm: false) { handle in
+                    var bytes = try handle.phraseBytes()
+                    defer { self.wipe(&bytes) }
+                    return bytes.map { NSNumber(value: $0) }
+                }
+                resolve(phrase)
+            } catch { resolve(self.failure(error)) }
+        }
+    }
+
+    @objc(vaultLearnAddresses:count:resolver:rejecter:)
+    func rnVaultLearnAddresses(
+        _ alias: String,
+        count: String,
+        resolver resolve: @escaping (Any?) -> Void,
+        rejecter reject: @escaping (String?, String?, Error?) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let wanted = try self.u64(count, "address count")
+                guard wanted >= 1, wanted <= Self.maxLearnedAddresses else {
+                    throw BridgeError(message: "learn between one and sixty four addresses at a time")
+                }
+                try self.unlocked(alias, title: "Show wallet addresses", summary: "Derive the first account addresses of this wallet", extra: "", confirm: false) { handle in
+                    try self.learn(alias, handle, from: 0, count: wanted)
+                }
+                resolve("")
+            } catch { resolve(self.failure(error)) }
         }
     }
 
@@ -1391,7 +1526,12 @@ class Qcore: NSObject {
         rejecter reject: @escaping (String?, String?, Error?) -> Void
     ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            resolve(self.resetWithAuthentication(alias, chainId: chainId, genesisHex: genesisHex, key: key, title: title, subtitle: subtitle))
+            do {
+                _ = try self.resetTarget(chainId, genesisHex, key)
+                try self.authenticateAgain(alias, title: "Reset nonce state", summary: "Clear the saved nonce state so this wallet signs again", title, subtitle)
+                try self.resetNow(chainId, genesisHex, key)
+                resolve("")
+            } catch { resolve(self.failure(error)) }
         }
     }
 
@@ -1407,65 +1547,50 @@ class Qcore: NSObject {
         rejecter reject: @escaping (String?, String?, Error?) -> Void
     ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            resolve(self.acknowledgeWithAuthentication(alias, chainId: chainId, genesisHex: genesisHex, key: key, title: title, subtitle: subtitle))
+            do {
+                let account = try self.namedAccount(chainId, genesisHex, key)
+                try self.authenticateAgain(alias, title: "Acknowledge imported history", summary: "Accept that this account signed elsewhere before this device kept its nonces", title, subtitle)
+                try self.recorded(account) {
+                    try acknowledgeImportedHistory(chainId: try self.u64(chainId, "chain id"), genesisHex: genesisHex, key: key)
+                }
+                resolve("")
+            } catch { resolve(self.failure(error)) }
         }
     }
 
-    private func acknowledgeWithAuthentication(_ alias: String, chainId: String, genesisHex: String, key: String, title: String, subtitle: String) -> NSString {
-        do {
-            try ensureOpen()
-            let alias = try checkedAlias(alias)
-            guard !chainId.isEmpty, !genesisHex.isEmpty, !key.isEmpty else {
-                throw BridgeError(message: "name the chain id, the genesis hash and the key of the account whose imported history is acknowledged")
-            }
-            let account = try nonceAccountOf(chainId, genesisHex, key)
-            let reason = [title, subtitle].filter { !$0.isEmpty }.joined(separator: ". ")
-            try authenticateAgain(alias, reason: reason.isEmpty ? "Acknowledge imported history" : reason)
-            try recorded(account) {
-                try acknowledgeImportedHistory(chainId: try u64(chainId, "chain id"), genesisHex: genesisHex, key: key)
-            }
-            return ""
-        } catch { return failure(error) }
+    @objc(vaultAcknowledgeMainnet:chainId:genesisHex:key:title:subtitle:resolver:rejecter:)
+    func rnVaultAcknowledgeMainnet(
+        _ alias: String,
+        chainId: String,
+        genesisHex: String,
+        key: String,
+        title: String,
+        subtitle: String,
+        resolver resolve: @escaping (Any?) -> Void,
+        rejecter reject: @escaping (String?, String?, Error?) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let account = try self.namedAccount(chainId, genesisHex, key)
+                try self.authenticateAgain(alias, title: "Allow mainnet signing", summary: "Let this wallet sign on mainnet, where a transaction moves real value", title, subtitle)
+                try self.recorded(account) {
+                    try acknowledgeMainnet(chainId: try self.u64(chainId, "chain id"), genesisHex: genesisHex, key: key)
+                }
+                resolve("")
+            } catch { resolve(self.failure(error)) }
+        }
     }
 
-    private func authenticateAgain(_ alias: String, reason: String) throws {
-        let context = LAContext()
-        context.touchIDAuthenticationAllowableReuseDuration = 0
-        context.localizedReason = reason
-        defer { context.invalidate() }
-        var seed = try Keychain.load(alias, context: context)
-        wipe(&seed)
+    private func namedAccount(_ chainId: String, _ genesisHex: String, _ key: String) throws -> String {
+        guard !chainId.isEmpty, !genesisHex.isEmpty, !key.isEmpty else {
+            throw BridgeError(message: "name the chain id, the genesis hash and the key of the account this acknowledgement is for")
+        }
+        return try nonceAccountOf(chainId, genesisHex, key)
     }
 
-    private func resetWithAuthentication(_ alias: String, chainId: String, genesisHex: String, key: String, title: String, subtitle: String) -> NSString {
-        do {
-            try ensureOpen()
-            let alias = try checkedAlias(alias)
-            _ = try resetTarget(chainId, genesisHex, key)
-            let reason = [title, subtitle].filter { !$0.isEmpty }.joined(separator: ". ")
-            try authenticateAgain(alias, reason: reason.isEmpty ? "Reset nonce state" : reason)
-            try resetNow(chainId, genesisHex, key)
-            return ""
-        } catch { return failure(error) }
-    }
-
-    private func revealNow(_ alias: String, title: String, subtitle: String) -> NSString {
-        do {
-            try ensureOpen()
-            let alias = try checkedAlias(alias)
-            let context = LAContext()
-            context.touchIDAuthenticationAllowableReuseDuration = 0
-            let reason = [title, subtitle].filter { !$0.isEmpty }.joined(separator: ". ")
-            context.localizedReason = reason.isEmpty ? "Reveal recovery phrase" : reason
-            defer { context.invalidate() }
-            var seed = try Keychain.load(alias, context: context)
-            defer { wipe(&seed) }
-            let handle = try SeedHandle.fromSeedBytes(seed: seed)
-            defer { handle.forget() }
-            var phrase = try handle.phraseBytes()
-            defer { wipe(&phrase) }
-            return phrase.base64EncodedString() as NSString
-        } catch { return failure(error) }
+    private func authenticateAgain(_ alias: String, title: String, summary: String, _ jsTitle: String, _ jsSubtitle: String) throws {
+        let extra = [jsTitle, jsSubtitle].filter { !$0.isEmpty }.joined(separator: "\n")
+        try unlocked(alias, title: title, summary: summary, extra: extra, confirm: false) { _ in }
     }
 
     @objc(vaultStorageLevel)
@@ -1480,11 +1605,8 @@ class Qcore: NSObject {
     func rnVaultHas(_ alias: String) -> NSString {
         do {
             try ensureOpen()
-            return try locked {
-                let alias = try checkedAlias(alias)
-                let present = try held[alias] != nil || Keychain.has(alias)
-                return (present ? "true" : "false") as NSString
-            }
+            let alias = try checkedAlias(alias)
+            return (try Keychain.has(alias) ? "true" : "false") as NSString
         } catch { return failure(error) }
     }
 
@@ -1492,10 +1614,7 @@ class Qcore: NSObject {
     func rnVaultClose(_ alias: String) -> NSString {
         do {
             try ensureOpen()
-            try locked {
-                let alias = try checkedAlias(alias)
-                drop(alias)
-            }
+            _ = try checkedAlias(alias)
             return ""
         } catch { return failure(error) }
     }
@@ -1504,28 +1623,44 @@ class Qcore: NSObject {
     func rnVaultCloseAll() -> NSString {
         do {
             try ensureOpen()
-            locked { forgetHeld() }
             return ""
         } catch { return failure(error) }
     }
 
-    @objc(vaultForget:)
-    func rnVaultForget(_ alias: String) -> NSString {
-        do {
-            try ensureOpen()
-            try locked {
-                let alias = try checkedAlias(alias)
-                drop(alias)
-                try Keychain.remove(alias)
-            }
-            return ""
-        } catch { return failure(error) }
+    @objc(vaultForget:title:subtitle:resolver:rejecter:)
+    func rnVaultForget(
+        _ alias: String,
+        title: String,
+        subtitle: String,
+        resolver resolve: @escaping (Any?) -> Void,
+        rejecter reject: @escaping (String?, String?, Error?) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try self.authenticateAgain(alias, title: "Delete wallet from this device", summary: "Delete the sealed seed of this wallet from this device", title, subtitle)
+                try self.locked {
+                    try Keychain.remove(alias)
+                    try AddressBook.remove(alias)
+                }
+                resolve("")
+            } catch { resolve(self.failure(error)) }
+        }
     }
 
     @objc(vaultAddress:index:)
     func rnVaultAddress(_ alias: String, index: String) -> NSString {
         do {
-            return try handleFor(alias).address(index: try u64(index, "index")) as NSString
+            try ensureOpen()
+            let alias = try checkedAlias(alias)
+            let at = try u64(index, "index")
+            try ensureForeground()
+            guard try Keychain.has(alias) else {
+                throw BridgeError(message: "no seed is stored under this alias")
+            }
+            guard let found = try locked({ try AddressBook.read(alias) })[at] else {
+                throw BridgeError(message: "authentication required, the address at index \(at) of this seed is not known on this device yet, learn it with learnAddresses after authenticating")
+            }
+            return found as NSString
         } catch { return failure(error) }
     }
 
@@ -1561,24 +1696,20 @@ class Qcore: NSObject {
         head: String,
         genesisHex: String
     ) -> NSString {
-        do {
-            let session = try session(sessionId)
-            let (handle, account) = try signer(alias, index, chainId, genesisHex)
-            return try recorded(account) {
-                try handle.signTransfer(
-                    session: session,
-                    index: try u64(index, "index"),
-                    to: to,
-                    amount: amount,
-                    nonce: try u64(nonce, "nonce"),
-                    fee: fee,
-                    chainId: try u64(chainId, "chain id"),
-                    validUntil: try u64(validUntil, "valid until"),
-                    head: try u64(head, "head"),
-                    genesisHex: genesisHex
-                ) as NSString
-            }
-        } catch { return failure(error) }
+        return vaultSigned(alias, sessionId: sessionId, index: index, chainId: chainId, genesisHex: genesisHex, summary: { try signingSummary(kind: "transfer", chainId: try u64(chainId, "chain id"), target: to, amount: amount, fee: fee, assetIssuer: "") }) { handle, session in
+            try handle.signTransfer(
+                session: session,
+                index: try u64(index, "index"),
+                to: to,
+                amount: amount,
+                nonce: try u64(nonce, "nonce"),
+                fee: fee,
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until"),
+                head: try u64(head, "head"),
+                genesisHex: genesisHex
+            )
+        }
     }
 
     @objc(vaultSignCall:sessionId:index:target:argsHex:nonce:meterLimit:fee:chainId:validUntil:transferFee:head:genesisHex:resolver:rejecter:)
@@ -1617,26 +1748,22 @@ class Qcore: NSObject {
         head: String,
         genesisHex: String
     ) -> NSString {
-        do {
-            let session = try session(sessionId)
-            let (handle, account) = try signer(alias, index, chainId, genesisHex)
-            return try recorded(account) {
-                try handle.signCall(
-                    session: session,
-                    index: try u64(index, "index"),
-                    target: target,
-                    argsHex: argsHex,
-                    nonce: try u64(nonce, "nonce"),
-                    meterLimit: try u64(meterLimit, "meter limit"),
-                    fee: fee,
-                    chainId: try u64(chainId, "chain id"),
-                    validUntil: try u64(validUntil, "valid until"),
-                    transferFee: transferFee,
-                    head: try u64(head, "head"),
-                    genesisHex: genesisHex
-                ) as NSString
-            }
-        } catch { return failure(error) }
+        return vaultSigned(alias, sessionId: sessionId, index: index, chainId: chainId, genesisHex: genesisHex, summary: { try signingSummary(kind: "call", chainId: try u64(chainId, "chain id"), target: target, amount: "0", fee: fee, assetIssuer: "") }) { handle, session in
+            try handle.signCall(
+                session: session,
+                index: try u64(index, "index"),
+                target: target,
+                argsHex: argsHex,
+                nonce: try u64(nonce, "nonce"),
+                meterLimit: try u64(meterLimit, "meter limit"),
+                fee: fee,
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until"),
+                transferFee: transferFee,
+                head: try u64(head, "head"),
+                genesisHex: genesisHex
+            )
+        }
     }
 
     @objc(vaultSignRegister:sessionId:index:nonce:fee:chainId:validUntil:head:genesisHex:resolver:rejecter:)
@@ -1667,22 +1794,18 @@ class Qcore: NSObject {
         head: String,
         genesisHex: String
     ) -> NSString {
-        do {
-            let session = try session(sessionId)
-            let (handle, account) = try signer(alias, index, chainId, genesisHex)
-            return try recorded(account) {
-                try handle.signRegister(
-                    session: session,
-                    index: try u64(index, "index"),
-                    nonce: try u64(nonce, "nonce"),
-                    fee: fee,
-                    chainId: try u64(chainId, "chain id"),
-                    validUntil: try u64(validUntil, "valid until"),
-                    head: try u64(head, "head"),
-                    genesisHex: genesisHex
-                ) as NSString
-            }
-        } catch { return failure(error) }
+        return vaultSigned(alias, sessionId: sessionId, index: index, chainId: chainId, genesisHex: genesisHex, summary: { try signingSummary(kind: "register", chainId: try u64(chainId, "chain id"), target: "", amount: "0", fee: fee, assetIssuer: "") }) { handle, session in
+            try handle.signRegister(
+                session: session,
+                index: try u64(index, "index"),
+                nonce: try u64(nonce, "nonce"),
+                fee: fee,
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until"),
+                head: try u64(head, "head"),
+                genesisHex: genesisHex
+            )
+        }
     }
 
     @objc(vaultSignPayableCall:sessionId:index:target:argsHex:nonce:meterLimit:fee:value:chainId:validUntil:transferFee:head:genesisHex:resolver:rejecter:)
@@ -1723,27 +1846,23 @@ class Qcore: NSObject {
         head: String,
         genesisHex: String
     ) -> NSString {
-        do {
-            let session = try session(sessionId)
-            let (handle, account) = try signer(alias, index, chainId, genesisHex)
-            return try recorded(account) {
-                try handle.signPayableCall(
-                    session: session,
-                    index: try u64(index, "index"),
-                    target: target,
-                    argsHex: argsHex,
-                    nonce: try u64(nonce, "nonce"),
-                    meterLimit: try u64(meterLimit, "meter limit"),
-                    fee: fee,
-                    value: value,
-                    chainId: try u64(chainId, "chain id"),
-                    validUntil: try u64(validUntil, "valid until"),
-                    transferFee: transferFee,
-                    head: try u64(head, "head"),
-                    genesisHex: genesisHex
-                ) as NSString
-            }
-        } catch { return failure(error) }
+        return vaultSigned(alias, sessionId: sessionId, index: index, chainId: chainId, genesisHex: genesisHex, summary: { try signingSummary(kind: "payable", chainId: try u64(chainId, "chain id"), target: target, amount: value, fee: fee, assetIssuer: "") }) { handle, session in
+            try handle.signPayableCall(
+                session: session,
+                index: try u64(index, "index"),
+                target: target,
+                argsHex: argsHex,
+                nonce: try u64(nonce, "nonce"),
+                meterLimit: try u64(meterLimit, "meter limit"),
+                fee: fee,
+                value: value,
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until"),
+                transferFee: transferFee,
+                head: try u64(head, "head"),
+                genesisHex: genesisHex
+            )
+        }
     }
 
     @objc(vaultSignAssetCall:sessionId:index:target:argsHex:assetIssuer:amount:nonce:meterLimit:fee:chainId:validUntil:transferFee:head:genesisHex:resolver:rejecter:)
@@ -1786,28 +1905,24 @@ class Qcore: NSObject {
         head: String,
         genesisHex: String
     ) -> NSString {
-        do {
-            let session = try session(sessionId)
-            let (handle, account) = try signer(alias, index, chainId, genesisHex)
-            return try recorded(account) {
-                try handle.signAssetCall(
-                    session: session,
-                    index: try u64(index, "index"),
-                    target: target,
-                    argsHex: argsHex,
-                    assetIssuer: assetIssuer,
-                    amount: amount,
-                    nonce: try u64(nonce, "nonce"),
-                    meterLimit: try u64(meterLimit, "meter limit"),
-                    fee: fee,
-                    chainId: try u64(chainId, "chain id"),
-                    validUntil: try u64(validUntil, "valid until"),
-                    transferFee: transferFee,
-                    head: try u64(head, "head"),
-                    genesisHex: genesisHex
-                ) as NSString
-            }
-        } catch { return failure(error) }
+        return vaultSigned(alias, sessionId: sessionId, index: index, chainId: chainId, genesisHex: genesisHex, summary: { try signingSummary(kind: "asset", chainId: try u64(chainId, "chain id"), target: target, amount: amount, fee: fee, assetIssuer: assetIssuer) }) { handle, session in
+            try handle.signAssetCall(
+                session: session,
+                index: try u64(index, "index"),
+                target: target,
+                argsHex: argsHex,
+                assetIssuer: assetIssuer,
+                amount: amount,
+                nonce: try u64(nonce, "nonce"),
+                meterLimit: try u64(meterLimit, "meter limit"),
+                fee: fee,
+                chainId: try u64(chainId, "chain id"),
+                validUntil: try u64(validUntil, "valid until"),
+                transferFee: transferFee,
+                head: try u64(head, "head"),
+                genesisHex: genesisHex
+            )
+        }
     }
 
     @objc(checkValidUntil:head:)

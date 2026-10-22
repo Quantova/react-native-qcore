@@ -103,13 +103,19 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(mapAddrWordKey:(NSString *)mapDomainTag
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(scalarSlotKey:(NSString *)slot)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultCreate:(NSString *)alias)
+RCT_EXTERN_METHOD(vaultCreate:(NSString *)alias
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultImportPhrase:(NSString *)alias
-                                        phraseBase64:(NSString *)phraseBase64)
+RCT_EXTERN_METHOD(vaultImportPhrase:(NSString *)alias
+                  phrase:(NSArray<NSNumber *> *)phrase
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultImportSeed:(NSString *)alias
-                                        seedBase64:(NSString *)seedBase64)
+RCT_EXTERN_METHOD(vaultImportSeed:(NSString *)alias
+                  seed:(NSArray<NSNumber *> *)seed
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(vaultRevealPhrase:(NSString *)alias
                   title:(NSString *)title
@@ -135,6 +141,20 @@ RCT_EXTERN_METHOD(vaultAcknowledgeImportedHistory:(NSString *)alias
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(vaultAcknowledgeMainnet:(NSString *)alias
+                  chainId:(NSString *)chainId
+                  genesisHex:(NSString *)genesisHex
+                  key:(NSString *)key
+                  title:(NSString *)title
+                  subtitle:(NSString *)subtitle
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(vaultLearnAddresses:(NSString *)alias
+                  count:(NSString *)count
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultStorageLevel)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultHas:(NSString *)alias)
@@ -143,7 +163,11 @@ RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultClose:(NSString *)alias)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultCloseAll)
 
-RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultForget:(NSString *)alias)
+RCT_EXTERN_METHOD(vaultForget:(NSString *)alias
+                  title:(NSString *)title
+                  subtitle:(NSString *)subtitle
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(vaultAddress:(NSString *)alias index:(NSString *)index)
 
