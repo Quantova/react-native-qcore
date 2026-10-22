@@ -3,25 +3,24 @@
 
 package com.quantova.qcore
 
+import android.app.Activity
 import android.app.ActivityManager
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Base64
-import com.facebook.react.bridge.LifecycleEventListener
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.ReadableType
 import java.util.UUID
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
+import javax.crypto.Cipher
 import uniffi.quantova_qcore.SeedHandle
 import uniffi.quantova_qcore.SigningSession
 
-class QcoreModule(reactContext: ReactApplicationContext) :
-    ReactContextBaseJavaModule(reactContext),
-    LifecycleEventListener {
+class QcoreModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
     override fun getName(): String = NAME
 
@@ -33,66 +32,14 @@ class QcoreModule(reactContext: ReactApplicationContext) :
 
     private val lock = Any()
 
-    private val held = HashMap<String, SeedHandle>()
-
-    private val heldAt = HashMap<String, Long>()
-
-    private val worker = Executors.newSingleThreadScheduledExecutor { task ->
-        Thread(task, "qcore-vault").apply { isDaemon = true }
-    }
-
     private val nonceWorker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "qcore-nonces").apply { isDaemon = true }
     }
-
-    private var idleTimer: ScheduledFuture<*>? = null
 
     @Volatile
     private var closed = false
 
     private val revealGate by lazy { RevealGate(reactApplicationContext) }
-
-    init {
-        reactContext.addLifecycleEventListener(this)
-    }
-
-    private fun expireIdle() {
-        val now = SystemClock.elapsedRealtime()
-        val stale = heldAt.filterValues { now - it >= IDLE_MILLIS }.keys.toList()
-        for (alias in stale) {
-            held.remove(alias)?.let { release(it) }
-            heldAt.remove(alias)
-        }
-        armIdleTimer(now)
-    }
-
-    private fun armIdleTimer(now: Long) {
-        idleTimer?.cancel(false)
-        idleTimer = null
-        val oldest = heldAt.values.minOrNull() ?: return
-        val delay = (oldest + IDLE_MILLIS - now).coerceAtLeast(0L)
-        idleTimer = worker.schedule({ synchronized(lock) { expireIdle() } }, delay, TimeUnit.MILLISECONDS)
-    }
-
-    private fun touch(alias: String) {
-        val now = SystemClock.elapsedRealtime()
-        heldAt[alias] = now
-        armIdleTimer(now)
-    }
-
-    private fun drop(alias: String) {
-        held.remove(alias)?.let { release(it) }
-        heldAt.remove(alias)
-        armIdleTimer(SystemClock.elapsedRealtime())
-    }
-
-    private fun forgetHeld() {
-        idleTimer?.cancel(false)
-        idleTimer = null
-        held.values.forEach { release(it) }
-        held.clear()
-        heldAt.clear()
-    }
 
     private val sessions = HashMap<String, SigningSession>()
 
@@ -167,24 +114,18 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun base64Bytes(text: String, label: String): ByteArray {
-        val ascii = text.toByteArray(Charsets.US_ASCII)
-        try {
-            return Base64.decode(ascii, Base64.NO_WRAP)
-        } catch (error: IllegalArgumentException) {
-            throw BridgeException("the $label is not base64")
-        } finally {
-            ascii.fill(0)
+    private fun arrayBytes(values: ReadableArray, label: String): ByteArray {
+        if (values.size() > MAX_SECRET_BYTES) throw BridgeException("the $label is too long")
+        val out = ByteArray(values.size())
+        for (i in 0 until values.size()) {
+            val value = if (values.getType(i) == ReadableType.Number) values.getDouble(i) else -1.0
+            if (value < 0 || value > 255 || value != Math.floor(value)) {
+                out.fill(0)
+                throw BridgeException("the $label is not a list of byte values")
+            }
+            out[i] = value.toInt().toByte()
         }
-    }
-
-    private fun base64Of(bytes: ByteArray): String {
-        val encoded = Base64.encode(bytes, Base64.NO_WRAP)
-        try {
-            return String(encoded, Charsets.US_ASCII)
-        } finally {
-            encoded.fill(0)
-        }
+        return out
     }
 
     private inline fun <T> withSeedHex(seedHex: String, use: (ByteArray) -> T): T {
@@ -210,66 +151,144 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         if (closed) throw BridgeException(CLOSED)
     }
 
-    private fun hold(alias: String, handle: SeedHandle) {
-        try {
-            touch(alias)
-        } catch (error: Throwable) {
-            heldAt.remove(alias)
-            release(handle)
-            throw error
-        }
-        held.put(alias, handle)?.let { if (it !== handle) release(it) }
-    }
-
     private fun ensureForeground() {
         val state = ActivityManager.RunningAppProcessInfo()
         ActivityManager.getMyMemoryState(state)
         if (state.importance != ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
-            forgetHeld()
             throw BridgeException(BACKGROUND)
         }
     }
 
-    private fun handleFor(alias: String): SeedHandle = synchronized(lock) {
-        ensureOpen()
-        checkedAlias(alias)
-        ensureForeground()
-        expireIdle()
-        held[alias]?.let { found ->
-            touch(alias)
-            return@synchronized found
-        }
-        val seed = store.load(alias) ?: throw BridgeException("no seed is stored under this alias")
-        val handle = try {
-            SeedHandle.fromSeedBytes(seed)
-        } finally {
-            seed.fill(0)
-        }
-        hold(alias, handle)
-        handle
-    }
-
-    private fun keep(alias: String, make: () -> SeedHandle) {
+    private fun foregroundActivity(alias: String, needSeed: Boolean): Activity {
         synchronized(lock) {
             ensureOpen()
+            checkedAlias(alias)
             ensureForeground()
-            if (store.has(checkedAlias(alias))) {
-                throw BridgeException("a seed is already stored under this alias, forget it first")
+            if (needSeed && !store.has(alias)) throw BridgeException(NO_SEED)
+        }
+        return reactApplicationContext.currentActivity ?: throw BridgeException(BACKGROUND)
+    }
+
+    private fun resolveLater(promise: Promise, refused: Throwable?, work: () -> Any) {
+        try {
+            nonceWorker.execute {
+                promise.resolve(
+                    if (refused != null) {
+                        failure(refused)
+                    } else {
+                        try {
+                            work()
+                        } catch (error: Throwable) {
+                            failure(error)
+                        }
+                    },
+                )
             }
-            val handle = make()
-            try {
-                val seed = handle.seedBytes()
-                try {
-                    store.save(alias, seed)
+        } catch (error: Throwable) {
+            promise.resolve(failure(BridgeException(CLOSED)))
+        }
+    }
+
+    private fun authorized(promise: Promise, alias: String, gate: Gate, summary: String, extra: String, needSeed: Boolean, prepare: () -> Unit, work: () -> Any) {
+        val activity = try {
+            prepare()
+            foregroundActivity(alias, needSeed)
+        } catch (error: Throwable) {
+            promise.resolve(failure(error))
+            return
+        }
+        revealGate.authorize(activity, gate, summary, extra) { refused -> resolveLater(promise, refused, work) }
+    }
+
+    private fun withSeed(promise: Promise, alias: String, gate: Gate, summary: String, extra: String, prepare: () -> Unit, use: (SeedHandle) -> Any) {
+        val activity: Activity
+        val sealed: SealedSeed
+        val cipher: Cipher?
+        try {
+            prepare()
+            activity = foregroundActivity(alias, true)
+            sealed = store.read(alias) ?: throw BridgeException(NO_SEED)
+            cipher = if (store.perUse(sealed)) store.opener(sealed) else null
+        } catch (error: Throwable) {
+            promise.resolve(failure(error))
+            return
+        }
+        val opened = { refused: Throwable? ->
+            resolveLater(promise, refused) {
+                synchronized(lock) { ensureOpen() }
+                val seed = store.open(sealed, cipher ?: store.opener(sealed))
+                val handle = try {
+                    SeedHandle.fromSeedBytes(seed)
                 } finally {
                     seed.fill(0)
                 }
-            } catch (error: Throwable) {
-                release(handle)
-                throw error
+                try {
+                    use(handle)
+                } finally {
+                    release(handle)
+                }
             }
-            hold(alias, handle)
         }
+        if (cipher != null) {
+            revealGate.unlock(activity, cipher, gate, summary, extra, opened)
+        } else {
+            revealGate.authorize(activity, gate, summary, extra, opened)
+        }
+    }
+
+    private fun protect(promise: Promise, alias: String, make: () -> SeedHandle) {
+        val activity: Activity
+        val handle: SeedHandle
+        try {
+            activity = foregroundActivity(alias, false)
+            if (store.has(alias)) throw BridgeException(SEED_EXISTS)
+            handle = make()
+        } catch (error: Throwable) {
+            promise.resolve(failure(error))
+            return
+        }
+        val cipher = try {
+            val perUse = revealGate.path(activity) == GatePath.PROMPT
+            store.renew(alias, perUse)
+            if (perUse) store.sealer(alias) else null
+        } catch (error: Throwable) {
+            release(handle)
+            promise.resolve(failure(error))
+            return
+        }
+        val sealed = { refused: Throwable? ->
+            if (refused != null) release(handle)
+            resolveLater(promise, refused) {
+                try {
+                    synchronized(lock) {
+                        ensureOpen()
+                        if (store.has(alias)) throw BridgeException(SEED_EXISTS)
+                        val seed = handle.seedBytes()
+                        try {
+                            store.seal(alias, cipher ?: store.sealer(alias), seed)
+                        } finally {
+                            seed.fill(0)
+                        }
+                    }
+                    learn(alias, handle, 0L, PRELOADED_ADDRESSES)
+                    ""
+                } finally {
+                    release(handle)
+                }
+            }
+        }
+        val summary = "Seal this seed with the device lock so only you can sign with it"
+        if (cipher != null) {
+            revealGate.unlock(activity, cipher, Gate.PROTECT, summary, "", sealed)
+        } else {
+            revealGate.authorize(activity, Gate.PROTECT, summary, "", sealed)
+        }
+    }
+
+    private fun learn(alias: String, handle: SeedHandle, from: Long, count: Long) {
+        val found = HashMap<Long, String>()
+        for (index in from until from + count) found[index] = handle.address(index.toULong())
+        synchronized(lock) { store.remember(alias, found) }
     }
 
     private fun session(id: String): SigningSession =
@@ -318,11 +337,6 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     private fun account(chainId: String, genesisHex: String, key: String): String =
         uniffi.quantova_qcore.nonceAccount(u64(chainId, "chain id"), genesisHex, key)
 
-    private fun signer(alias: String, index: String, chainId: String, genesisHex: String): Pair<SeedHandle, String> {
-        val handle = handleFor(alias)
-        return handle to uniffi.quantova_qcore.nonceAccount(u64(chainId, "chain id"), genesisHex, handle.address(u64(index, "index")))
-    }
-
     private class ResetTarget(val chainId: ULong, val genesisHex: String, val key: String)
 
     private fun resetTarget(chainId: String, genesisHex: String, key: String): ResetTarget? = when {
@@ -346,25 +360,12 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    override fun onHostResume() {}
-
-    override fun onHostPause() {
-        synchronized(lock) { forgetHeld() }
-    }
-
-    override fun onHostDestroy() {
-        synchronized(lock) { forgetHeld() }
-    }
-
     override fun invalidate() {
-        reactApplicationContext.removeLifecycleEventListener(this)
         synchronized(lock) {
             closed = true
-            forgetHeld()
             sessions.values.forEach { it.destroy() }
             sessions.clear()
         }
-        worker.shutdownNow()
         nonceWorker.shutdown()
         super.invalidate()
     }
@@ -644,162 +645,123 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         uniffi.quantova_qcore.scalarSlotKey(u64(slot, "slot"))
     }
 
-    @ReactMethod(isBlockingSynchronousMethod = true)
-    fun vaultCreate(alias: String): String = guarded {
-        keep(alias) { SeedHandle.generate() }
-        ""
+    @ReactMethod
+    fun vaultCreate(alias: String, promise: Promise) {
+        protect(promise, alias) { SeedHandle.generate() }
     }
 
-    @ReactMethod(isBlockingSynchronousMethod = true)
-    fun vaultImportPhrase(alias: String, phraseBase64: String): String = guarded {
-        keep(alias) {
-            val phrase = base64Bytes(phraseBase64, "phrase")
+    @ReactMethod
+    fun vaultImportPhrase(alias: String, phrase: ReadableArray, promise: Promise) {
+        protect(promise, alias) {
+            val bytes = arrayBytes(phrase, "phrase")
             try {
-                SeedHandle.fromPhraseBytes(phrase)
+                SeedHandle.fromPhraseBytes(bytes)
             } finally {
-                phrase.fill(0)
+                bytes.fill(0)
             }
         }
-        ""
     }
 
-    @ReactMethod(isBlockingSynchronousMethod = true)
-    fun vaultImportSeed(alias: String, seedBase64: String): String = guarded {
-        keep(alias) {
-            val seed = base64Bytes(seedBase64, "seed")
+    @ReactMethod
+    fun vaultImportSeed(alias: String, seed: ReadableArray, promise: Promise) {
+        protect(promise, alias) {
+            val bytes = arrayBytes(seed, "seed")
             try {
-                SeedHandle.fromSeedBytes(seed)
+                SeedHandle.fromSeedBytes(bytes)
             } finally {
-                seed.fill(0)
+                bytes.fill(0)
             }
         }
-        ""
     }
 
     @ReactMethod
     fun vaultRevealPhrase(alias: String, title: String, subtitle: String, promise: Promise) {
-        val activity = try {
-            synchronized(lock) {
-                ensureOpen()
-                if (!store.has(checkedAlias(alias))) throw BridgeException("no seed is stored under this alias")
-            }
-            reactApplicationContext.currentActivity
-                ?: throw BridgeException("the phrase can be revealed only while the app is in the foreground")
-        } catch (error: Throwable) {
-            promise.resolve(failure(error))
-            return
-        }
-        revealGate.authorize(activity, title, subtitle) { refused ->
+        withSeed(promise, alias, Gate.REVEAL, "Show the recovery phrase of this wallet on screen", gateText(title, subtitle), {}) { handle ->
+            val phrase = handle.phraseBytes()
             try {
-                worker.execute { promise.resolve(if (refused != null) failure(refused) else guarded { revealNow(alias) }) }
-            } catch (error: Throwable) {
-                promise.resolve(failure(error))
+                val out = Arguments.createArray()
+                phrase.forEach { out.pushInt(it.toInt() and 0xff) }
+                out
+            } finally {
+                phrase.fill(0)
             }
+        }
+    }
+
+    @ReactMethod
+    fun vaultLearnAddresses(alias: String, count: String, promise: Promise) {
+        var wanted = 0L
+        withSeed(
+            promise,
+            alias,
+            Gate.ADDRESSES,
+            "Derive the first account addresses of this wallet",
+            "",
+            {
+                wanted = u64(count, "address count").toLong()
+                if (wanted < 1 || wanted > MAX_LEARNED_ADDRESSES) throw BridgeException(ADDRESS_COUNT)
+            },
+        ) { handle ->
+            learn(alias, handle, 0L, wanted)
+            ""
         }
     }
 
     @ReactMethod
     fun vaultResetNonceState(alias: String, chainId: String, genesisHex: String, key: String, title: String, subtitle: String, promise: Promise) {
-        val activity = try {
-            resetTarget(chainId, genesisHex, key)
-            synchronized(lock) {
-                ensureOpen()
-                if (!store.has(checkedAlias(alias))) throw BridgeException("no seed is stored under this alias")
-            }
-            reactApplicationContext.currentActivity
-                ?: throw BridgeException("the nonce state can be reset only while the app is in the foreground")
-        } catch (error: Throwable) {
-            promise.resolve(failure(error))
-            return
-        }
-        revealGate.authorize(
-            activity,
-            title.ifEmpty { RESET_TITLE },
-            subtitle,
-            RESET_CANCELLED,
-            RESET_UNSUPPORTED,
-        ) { refused ->
-            try {
-                worker.execute {
-                    promise.resolve(
-                        if (refused != null) {
-                            failure(refused)
-                        } else {
-                            guarded {
-                                resetNow(chainId, genesisHex, key)
-                                ""
-                            }
-                        },
-                    )
-                }
-            } catch (error: Throwable) {
-                promise.resolve(failure(error))
-            }
+        authorized(
+            promise,
+            alias,
+            Gate.RESET,
+            "Clear the saved nonce state so this wallet signs again",
+            gateText(title, subtitle),
+            true,
+            { resetTarget(chainId, genesisHex, key) },
+        ) {
+            resetNow(chainId, genesisHex, key)
+            ""
         }
     }
 
     @ReactMethod
     fun vaultAcknowledgeImportedHistory(alias: String, chainId: String, genesisHex: String, key: String, title: String, subtitle: String, promise: Promise) {
-        val activity = try {
-            if (chainId.isEmpty() || genesisHex.isEmpty() || key.isEmpty()) throw BridgeException(ACKNOWLEDGE_NEEDS_ACCOUNT)
-            account(chainId, genesisHex, key)
-            synchronized(lock) {
-                ensureOpen()
-                if (!store.has(checkedAlias(alias))) throw BridgeException("no seed is stored under this alias")
+        authorized(
+            promise,
+            alias,
+            Gate.ACKNOWLEDGE,
+            "Accept that this account signed elsewhere before this device kept its nonces",
+            gateText(title, subtitle),
+            true,
+            {
+                if (chainId.isEmpty() || genesisHex.isEmpty() || key.isEmpty()) throw BridgeException(ACKNOWLEDGE_NEEDS_ACCOUNT)
+                account(chainId, genesisHex, key)
+            },
+        ) {
+            recorded(account(chainId, genesisHex, key)) {
+                uniffi.quantova_qcore.acknowledgeImportedHistory(u64(chainId, "chain id"), genesisHex, key)
             }
-            reactApplicationContext.currentActivity
-                ?: throw BridgeException("the imported history can be acknowledged only while the app is in the foreground")
-        } catch (error: Throwable) {
-            promise.resolve(failure(error))
-            return
-        }
-        revealGate.authorize(
-            activity,
-            title.ifEmpty { ACKNOWLEDGE_TITLE },
-            subtitle,
-            ACKNOWLEDGE_CANCELLED,
-            ACKNOWLEDGE_UNSUPPORTED,
-        ) { refused ->
-            try {
-                worker.execute {
-                    promise.resolve(
-                        if (refused != null) {
-                            failure(refused)
-                        } else {
-                            guarded {
-                                recorded(account(chainId, genesisHex, key)) {
-                                    uniffi.quantova_qcore.acknowledgeImportedHistory(u64(chainId, "chain id"), genesisHex, key)
-                                }
-                                ""
-                            }
-                        },
-                    )
-                }
-            } catch (error: Throwable) {
-                promise.resolve(failure(error))
-            }
+            ""
         }
     }
 
-    private fun revealNow(alias: String): String {
-        val handle = synchronized(lock) {
-            ensureOpen()
-            val seed = store.load(checkedAlias(alias)) ?: throw BridgeException("no seed is stored under this alias")
-            try {
-                SeedHandle.fromSeedBytes(seed)
-            } finally {
-                seed.fill(0)
+    @ReactMethod
+    fun vaultAcknowledgeMainnet(alias: String, chainId: String, genesisHex: String, key: String, title: String, subtitle: String, promise: Promise) {
+        authorized(
+            promise,
+            alias,
+            Gate.MAINNET,
+            "Let this wallet sign on mainnet, where a transaction moves real value",
+            gateText(title, subtitle),
+            true,
+            {
+                if (chainId.isEmpty() || genesisHex.isEmpty() || key.isEmpty()) throw BridgeException(ACKNOWLEDGE_NEEDS_ACCOUNT)
+                account(chainId, genesisHex, key)
+            },
+        ) {
+            recorded(account(chainId, genesisHex, key)) {
+                uniffi.quantova_qcore.acknowledgeMainnet(u64(chainId, "chain id"), genesisHex, key)
             }
-        }
-        try {
-            val phrase = handle.phraseBytes()
-            try {
-                return base64Of(phrase)
-            } finally {
-                phrase.fill(0)
-            }
-        } finally {
-            release(handle)
+            ""
         }
     }
 
@@ -815,7 +777,7 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     fun vaultHas(alias: String): String = guarded {
         synchronized(lock) {
             ensureOpen()
-            (held.containsKey(checkedAlias(alias)) || store.has(alias)).toString()
+            store.has(checkedAlias(alias)).toString()
         }
     }
 
@@ -823,34 +785,77 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     fun vaultClose(alias: String): String = guarded {
         synchronized(lock) {
             ensureOpen()
-            drop(checkedAlias(alias))
+            checkedAlias(alias)
         }
         ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultCloseAll(): String = guarded {
-        synchronized(lock) {
-            ensureOpen()
-            forgetHeld()
-        }
+        synchronized(lock) { ensureOpen() }
         ""
     }
 
-    @ReactMethod(isBlockingSynchronousMethod = true)
-    fun vaultForget(alias: String): String = guarded {
-        synchronized(lock) {
-            ensureOpen()
-            drop(checkedAlias(alias))
-            store.remove(alias)
+    @ReactMethod
+    fun vaultForget(alias: String, title: String, subtitle: String, promise: Promise) {
+        authorized(
+            promise,
+            alias,
+            Gate.FORGET,
+            "Delete the sealed seed of this wallet from this device",
+            gateText(title, subtitle),
+            true,
+            {},
+        ) {
+            synchronized(lock) {
+                ensureOpen()
+                store.remove(alias)
+            }
+            ""
         }
-        ""
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun vaultAddress(alias: String, index: String): String = guarded {
-        handleFor(alias).address(u64(index, "index"))
+        val at = u64(index, "index")
+        synchronized(lock) {
+            ensureOpen()
+            ensureForeground()
+            if (!store.has(checkedAlias(alias))) throw BridgeException(NO_SEED)
+            store.address(alias, at.toLong())
+        } ?: throw BridgeException("authentication required, the address at index $at of this seed is not known on this device yet, learn it with learnAddresses after authenticating")
     }
+
+    private fun vaultSign(
+        promise: Promise,
+        alias: String,
+        sessionId: String,
+        index: String,
+        chainId: String,
+        genesisHex: String,
+        shown: () -> String,
+        sign: (SeedHandle, SigningSession) -> String,
+    ) {
+        val summary = try {
+            session(sessionId)
+            u64(index, "index")
+            uniffi.quantova_qcore.nonceAccount(u64(chainId, "chain id"), genesisHex, PROBE_KEY)
+            shown()
+        } catch (error: Throwable) {
+            promise.resolve(failure(error))
+            return
+        }
+        withSeed(promise, alias, Gate.SIGN, summary, "", {}) { handle ->
+            val session = session(sessionId)
+            val at = u64(index, "index")
+            val address = handle.address(at)
+            learn(alias, handle, at.toLong(), 1L)
+            recorded(account(chainId, genesisHex, address)) { sign(handle, session) }
+        }
+    }
+
+    private fun summaryOf(kind: String, chainId: String, target: String, amount: String, fee: String, assetIssuer: String): String =
+        uniffi.quantova_qcore.signingSummary(kind, u64(chainId, "chain id"), target, amount, fee, assetIssuer)
 
     @ReactMethod
     fun vaultSignTransfer(
@@ -866,23 +871,19 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
         genesisHex: String,
         promise: Promise,
-    ) = answer(promise) {
-        val session = session(sessionId)
-        val (handle, account) = signer(alias, index, chainId, genesisHex)
-        recorded(account) {
-            handle.signTransfer(
-                session,
-                u64(index, "index"),
-                to,
-                amount,
-                u64(nonce, "nonce"),
-                fee,
-                u64(chainId, "chain id"),
-                u64(validUntil, "valid until"),
-                u64(head, "head"),
-                genesisHex,
-            )
-        }
+    ) = vaultSign(promise, alias, sessionId, index, chainId, genesisHex, { summaryOf("transfer", chainId, to, amount, fee, "") }) { handle, session ->
+        handle.signTransfer(
+            session,
+            u64(index, "index"),
+            to,
+            amount,
+            u64(nonce, "nonce"),
+            fee,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            u64(head, "head"),
+            genesisHex,
+        )
     }
 
     @ReactMethod
@@ -901,25 +902,21 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
         genesisHex: String,
         promise: Promise,
-    ) = answer(promise) {
-        val session = session(sessionId)
-        val (handle, account) = signer(alias, index, chainId, genesisHex)
-        recorded(account) {
-            handle.signCall(
-                session,
-                u64(index, "index"),
-                target,
-                argsHex,
-                u64(nonce, "nonce"),
-                u64(meterLimit, "meter limit"),
-                fee,
-                u64(chainId, "chain id"),
-                u64(validUntil, "valid until"),
-                transferFee,
-                u64(head, "head"),
-                genesisHex,
-            )
-        }
+    ) = vaultSign(promise, alias, sessionId, index, chainId, genesisHex, { summaryOf("call", chainId, target, "0", fee, "") }) { handle, session ->
+        handle.signCall(
+            session,
+            u64(index, "index"),
+            target,
+            argsHex,
+            u64(nonce, "nonce"),
+            u64(meterLimit, "meter limit"),
+            fee,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            transferFee,
+            u64(head, "head"),
+            genesisHex,
+        )
     }
 
     @ReactMethod
@@ -934,21 +931,17 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
         genesisHex: String,
         promise: Promise,
-    ) = answer(promise) {
-        val session = session(sessionId)
-        val (handle, account) = signer(alias, index, chainId, genesisHex)
-        recorded(account) {
-            handle.signRegister(
-                session,
-                u64(index, "index"),
-                u64(nonce, "nonce"),
-                fee,
-                u64(chainId, "chain id"),
-                u64(validUntil, "valid until"),
-                u64(head, "head"),
-                genesisHex,
-            )
-        }
+    ) = vaultSign(promise, alias, sessionId, index, chainId, genesisHex, { summaryOf("register", chainId, "", "0", fee, "") }) { handle, session ->
+        handle.signRegister(
+            session,
+            u64(index, "index"),
+            u64(nonce, "nonce"),
+            fee,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            u64(head, "head"),
+            genesisHex,
+        )
     }
 
     @ReactMethod
@@ -968,26 +961,22 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
         genesisHex: String,
         promise: Promise,
-    ) = answer(promise) {
-        val session = session(sessionId)
-        val (handle, account) = signer(alias, index, chainId, genesisHex)
-        recorded(account) {
-            handle.signPayableCall(
-                session,
-                u64(index, "index"),
-                target,
-                argsHex,
-                u64(nonce, "nonce"),
-                u64(meterLimit, "meter limit"),
-                fee,
-                value,
-                u64(chainId, "chain id"),
-                u64(validUntil, "valid until"),
-                transferFee,
-                u64(head, "head"),
-                genesisHex,
-            )
-        }
+    ) = vaultSign(promise, alias, sessionId, index, chainId, genesisHex, { summaryOf("payable", chainId, target, value, fee, "") }) { handle, session ->
+        handle.signPayableCall(
+            session,
+            u64(index, "index"),
+            target,
+            argsHex,
+            u64(nonce, "nonce"),
+            u64(meterLimit, "meter limit"),
+            fee,
+            value,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            transferFee,
+            u64(head, "head"),
+            genesisHex,
+        )
     }
 
     @ReactMethod
@@ -1008,27 +997,23 @@ class QcoreModule(reactContext: ReactApplicationContext) :
         head: String,
         genesisHex: String,
         promise: Promise,
-    ) = answer(promise) {
-        val session = session(sessionId)
-        val (handle, account) = signer(alias, index, chainId, genesisHex)
-        recorded(account) {
-            handle.signAssetCall(
-                session,
-                u64(index, "index"),
-                target,
-                argsHex,
-                assetIssuer,
-                amount,
-                u64(nonce, "nonce"),
-                u64(meterLimit, "meter limit"),
-                fee,
-                u64(chainId, "chain id"),
-                u64(validUntil, "valid until"),
-                transferFee,
-                u64(head, "head"),
-                genesisHex,
-            )
-        }
+    ) = vaultSign(promise, alias, sessionId, index, chainId, genesisHex, { summaryOf("asset", chainId, target, amount, fee, assetIssuer) }) { handle, session ->
+        handle.signAssetCall(
+            session,
+            u64(index, "index"),
+            target,
+            argsHex,
+            assetIssuer,
+            amount,
+            u64(nonce, "nonce"),
+            u64(meterLimit, "meter limit"),
+            fee,
+            u64(chainId, "chain id"),
+            u64(validUntil, "valid until"),
+            transferFee,
+            u64(head, "head"),
+            genesisHex,
+        )
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
@@ -1233,18 +1218,18 @@ class QcoreModule(reactContext: ReactApplicationContext) :
     companion object {
         const val NAME = "Qcore"
         const val FAILURE_PREFIX = "\u0000QCORE_ERROR:"
-        private const val IDLE_MILLIS = 120_000L
         private const val MAX_SESSIONS = 64
+        private const val MAX_SECRET_BYTES = 4096
+        private const val MAX_LEARNED_ADDRESSES = 64L
+        private const val PRELOADED_ADDRESSES = 8L
+        private const val PROBE_KEY = "vault"
         private const val TOO_MANY_SESSIONS = "too many signing sessions are open, close one first"
         private const val CLOSED = "the vault module was shut down, so it serves no further vault call"
         private const val BACKGROUND = "the vault is used only while the app is in the foreground, nothing was signed"
-        private const val RESET_TITLE = "Reset nonce state"
-        private const val RESET_CANCELLED = "authentication cancelled, the nonce state was not reset"
-        private const val RESET_UNSUPPORTED = "resetting the nonce state needs a device lock"
-        private const val ACKNOWLEDGE_TITLE = "Acknowledge imported history"
-        private const val ACKNOWLEDGE_CANCELLED = "authentication cancelled, the imported history was not acknowledged"
-        private const val ACKNOWLEDGE_UNSUPPORTED = "acknowledging imported history needs a device lock"
-        private const val ACKNOWLEDGE_NEEDS_ACCOUNT = "name the chain id, the genesis hash and the key of the account whose imported history is acknowledged"
+        private const val NO_SEED = "no seed is stored under this alias"
+        private const val SEED_EXISTS = "a seed is already stored under this alias, forget it first"
+        private const val ADDRESS_COUNT = "learn between one and sixty four addresses at a time"
+        private const val ACKNOWLEDGE_NEEDS_ACCOUNT = "name the chain id, the genesis hash and the key of the account this acknowledgement is for"
         private val NONCE_LOCK = Any()
         private val HEX = "0123456789abcdef".toCharArray()
     }

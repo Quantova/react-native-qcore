@@ -28,6 +28,28 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
+internal enum class Gate(val title: String, val cancelled: String, val unsupported: String) {
+    REVEAL("Reveal recovery phrase", "authentication cancelled, the phrase was not revealed", "revealing the phrase needs a device lock"),
+    RESET("Reset nonce state", "authentication cancelled, the nonce state was not reset", "resetting the nonce state needs a device lock"),
+    ACKNOWLEDGE("Acknowledge imported history", "authentication cancelled, the imported history was not acknowledged", "acknowledging imported history needs a device lock"),
+    MAINNET("Allow mainnet signing", "authentication cancelled, mainnet was not acknowledged", "acknowledging mainnet needs a device lock"),
+    FORGET("Delete wallet from this device", "authentication cancelled, the seed was not deleted", "deleting a seed needs a device lock"),
+    PROTECT("Store wallet on this device", "authentication cancelled, the seed was not stored", "storing a seed needs a device lock"),
+    ADDRESSES("Show wallet addresses", "authentication cancelled, no address was derived", "deriving addresses needs a device lock"),
+    SIGN("Approve transaction", "authentication cancelled, nothing was signed", "signing needs a device lock"),
+}
+
+internal enum class GatePath { PROMPT, CONFIRM }
+
+internal fun gatePath(sdk: Int, biometricEnrolled: Boolean): GatePath = when {
+    sdk >= Build.VERSION_CODES.R -> GatePath.PROMPT
+    sdk >= Build.VERSION_CODES.P && biometricEnrolled -> GatePath.PROMPT
+    else -> GatePath.CONFIRM
+}
+
+internal fun gateText(primary: String, secondary: String): String =
+    listOf(primary, secondary).filter { it.isNotEmpty() }.joinToString("\n")
+
 internal class RevealGate(private val context: ReactContext) {
 
     private class Pending(val code: Int, val since: Long, val listener: BaseActivityEventListener, val abandon: () -> Unit)
@@ -36,18 +58,36 @@ internal class RevealGate(private val context: ReactContext) {
 
     private val nextCode = AtomicInteger(SecureRandom().nextInt(CODE_SPAN))
 
+    fun path(activity: Activity): GatePath {
+        val sdk = Build.VERSION.SDK_INT
+        if (sdk >= Build.VERSION_CODES.R || sdk < Build.VERSION_CODES.P) return gatePath(sdk, false)
+        return gatePath(sdk, biometricEnrolled(activity))
+    }
+
+    @Suppress("DEPRECATION")
+    private fun biometricEnrolled(activity: Activity): Boolean =
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                activity.getSystemService(BiometricManager::class.java)?.canAuthenticate() == BiometricManager.BIOMETRIC_SUCCESS
+            } else {
+                key()
+                true
+            }
+        } catch (error: Throwable) {
+            false
+        }
+
     fun authorize(
         activity: Activity,
-        title: String,
-        subtitle: String,
-        cancelled: String = AUTHENTICATION_CANCELLED,
-        unsupported: String = REVEAL_UNSUPPORTED,
+        gate: Gate,
+        summary: String,
+        extra: String,
         done: (Throwable?) -> Unit,
     ) {
         val settled = AtomicBoolean(false)
         val finish = { outcome: Throwable? -> if (settled.compareAndSet(false, true)) done(outcome) }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            confirm(activity, title, subtitle, cancelled, unsupported, finish)
+        if (path(activity) == GatePath.CONFIRM) {
+            confirm(activity, gate, summary, extra, finish)
             return
         }
         val cipher = try {
@@ -58,7 +98,32 @@ internal class RevealGate(private val context: ReactContext) {
         }
         activity.runOnUiThread {
             try {
-                prompt(activity, cipher, title, subtitle, cancelled, finish)
+                prompt(activity, cipher, gate, summary, extra, finish) { used -> proof(cipher, used) }
+            } catch (error: Throwable) {
+                finish(error)
+            }
+        }
+    }
+
+    fun unlock(
+        activity: Activity,
+        cipher: Cipher,
+        gate: Gate,
+        summary: String,
+        extra: String,
+        done: (Throwable?) -> Unit,
+    ) {
+        val settled = AtomicBoolean(false)
+        val finish = { outcome: Throwable? -> if (settled.compareAndSet(false, true)) done(outcome) }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            finish(SeedStoreException(gate.unsupported))
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                prompt(activity, cipher, gate, summary, extra, finish) { used ->
+                    if (used === cipher) null else SeedStoreException(SeedStore.AUTHENTICATION_REQUIRED)
+                }
             } catch (error: Throwable) {
                 finish(error)
             }
@@ -67,15 +132,14 @@ internal class RevealGate(private val context: ReactContext) {
 
     private fun confirm(
         activity: Activity,
-        title: String,
-        subtitle: String,
-        cancelled: String,
-        unsupported: String,
+        gate: Gate,
+        summary: String,
+        extra: String,
         finish: (Throwable?) -> Unit,
     ) {
         val keyguard = activity.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
         if (keyguard == null || !keyguard.isDeviceSecure) {
-            finish(SeedStoreException(unsupported))
+            finish(SeedStoreException(gate.unsupported))
             return
         }
         try {
@@ -85,9 +149,9 @@ internal class RevealGate(private val context: ReactContext) {
             return
         }
         @Suppress("DEPRECATION")
-        val intent = keyguard.createConfirmDeviceCredentialIntent(title.ifEmpty { DEFAULT_TITLE }, subtitle.ifEmpty { null })
+        val intent = keyguard.createConfirmDeviceCredentialIntent(gate.title, gateText(summary, extra).ifEmpty { null })
         if (intent == null) {
-            finish(SeedStoreException(unsupported))
+            finish(SeedStoreException(gate.unsupported))
             return
         }
         val code = CODE_BASE + Math.floorMod(nextCode.getAndIncrement(), CODE_SPAN)
@@ -98,10 +162,10 @@ internal class RevealGate(private val context: ReactContext) {
                 context.removeActivityEventListener(this)
                 val mine = holder.get() ?: return
                 if (!pending.compareAndSet(mine, null)) return
-                finish(if (resultCode == Activity.RESULT_OK) recentProof() else SeedStoreException(cancelled))
+                finish(if (resultCode == Activity.RESULT_OK) recentProof() else SeedStoreException(gate.cancelled))
             }
         }
-        val mine = Pending(code, System.nanoTime(), listener) { finish(SeedStoreException(cancelled)) }
+        val mine = Pending(code, System.nanoTime(), listener) { finish(SeedStoreException(gate.cancelled)) }
         holder.set(mine)
         while (true) {
             val current = pending.get()
@@ -123,7 +187,7 @@ internal class RevealGate(private val context: ReactContext) {
                 activity.startActivityForResult(intent, code)
             } catch (error: Throwable) {
                 context.removeActivityEventListener(listener)
-                if (pending.compareAndSet(mine, null)) finish(SeedStoreException(unsupported))
+                if (pending.compareAndSet(mine, null)) finish(SeedStoreException(gate.unsupported))
             }
         }
     }
@@ -171,30 +235,32 @@ internal class RevealGate(private val context: ReactContext) {
     private fun prompt(
         activity: Activity,
         cipher: Cipher,
-        title: String,
-        subtitle: String,
-        cancelled: String,
+        gate: Gate,
+        summary: String,
+        extra: String,
         finish: (Throwable?) -> Unit,
+        check: (Cipher?) -> Throwable?,
     ) {
         val executor = activity.mainExecutor
-        val builder = BiometricPrompt.Builder(activity).setTitle(title.ifEmpty { DEFAULT_TITLE })
-        if (subtitle.isNotEmpty()) builder.setSubtitle(subtitle)
+        val builder = BiometricPrompt.Builder(activity).setTitle(gate.title)
+        val detail = gateText(summary, extra)
+        if (detail.isNotEmpty()) builder.setDescription(detail)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
         } else {
             builder.setNegativeButton(CANCEL_LABEL, executor) { _, _ ->
-                finish(SeedStoreException(cancelled))
+                finish(SeedStoreException(gate.cancelled))
             }
         }
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                finish(proof(cipher, result.cryptoObject?.cipher))
+                finish(check(result.cryptoObject?.cipher))
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 val byUser = errorCode == BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED ||
                     errorCode == BiometricPrompt.BIOMETRIC_ERROR_CANCELED
-                finish(SeedStoreException(if (byUser) cancelled else SeedStore.AUTHENTICATION_REQUIRED))
+                finish(SeedStoreException(if (byUser) gate.cancelled else SeedStore.AUTHENTICATION_REQUIRED))
             }
         }
         builder.build().authenticate(BiometricPrompt.CryptoObject(cipher), CancellationSignal(), executor, callback)
@@ -271,9 +337,6 @@ internal class RevealGate(private val context: ReactContext) {
     private object KeyLock
 
     companion object {
-        const val AUTHENTICATION_CANCELLED = "authentication cancelled, the phrase was not revealed"
-        const val REVEAL_UNSUPPORTED = "revealing the phrase needs a device lock"
-        private const val DEFAULT_TITLE = "Reveal recovery phrase"
         private const val CANCEL_LABEL = "Cancel"
         private const val KEYSTORE = "AndroidKeyStore"
         private const val KEY_ALIAS = "com.quantova.qcore.reveal.key.1"
