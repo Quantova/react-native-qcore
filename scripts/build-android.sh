@@ -27,5 +27,14 @@ REF_SO="$JNI_LIBS/arm64-v8a/libquantova_qcore.so"
   --language kotlin \
   --out-dir "$KOTLIN_OUT"
 
+STRIP="$(find "${ANDROID_NDK_HOME:?}/toolchains/llvm/prebuilt" -name llvm-strip \( -type f -o -type l \) | head -n 1)"
+if [[ ! -x "$STRIP" ]]; then
+  echo "llvm-strip was not found in the NDK at $ANDROID_NDK_HOME" >&2
+  exit 1
+fi
+for so in "$JNI_LIBS"/*/libquantova_qcore.so; do
+  "$STRIP" --strip-all "$so"
+done
+
 echo "android .so libraries under $JNI_LIBS"
 echo "kotlin bindings under $KOTLIN_OUT/uniffi/quantova_qcore"
