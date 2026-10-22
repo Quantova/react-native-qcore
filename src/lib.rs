@@ -812,6 +812,43 @@ pub fn decode_event(leaf_hex: String) -> Result<String, QcoreError> {
     .render())
 }
 
+#[uniffi::export]
+pub fn signing_summary(
+    kind: String,
+    chain_id: u64,
+    target: String,
+    amount: String,
+    fee: String,
+    asset_issuer: String,
+) -> Result<String, QcoreError> {
+    let fee = parse_fee(&fee)?;
+    let shown = qcore::shown(&target);
+    let line = match kind.as_str() {
+        "transfer" => format!("Send {} Quon to {shown}", parse_amount(&amount)?),
+        "payable" => format!("Pay {} Quon to contract {shown}", parse_amount(&amount)?),
+        "asset" => format!(
+            "Pay {} of the asset issued by {} to contract {shown}",
+            parse_amount(&amount)?,
+            qcore::shown(&asset_issuer)
+        ),
+        "call" => format!("Call contract {shown}"),
+        "register" => "Register this account key on chain".to_string(),
+        _ => return Err(err("the vault signs only a transfer, a call, a payable call, an asset call or a key registration")),
+    };
+    let network = match chain_name_of(chain_id) {
+        "" => format!("chain {chain_id}"),
+        name => name.to_string(),
+    };
+    let warning = if chain_id == qcore::MAINNET_CHAIN_ID {
+        "\nMainnet, this moves real value"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "{line}\nNetwork fee {fee} Quon\nOn {network}{warning}"
+    ))
+}
+
 pub const SEED_ALIAS_MAX: usize = 64;
 
 #[uniffi::export]
@@ -908,20 +945,28 @@ impl SeedHandle {
         let genesis = parse_genesis(&genesis_hex).map_err(err)?;
         let net = Network { chain_id, genesis };
         self.with_seed(|seed| {
-            session.signing(net, &qcore::account_address(seed, index), nonce, || {
-                transfer_with(
-                    seed,
-                    index,
-                    &to,
-                    &amount,
-                    nonce,
-                    &fee,
-                    chain_id,
-                    valid_until,
-                    head,
-                    &genesis,
-                )
-            })
+            session.signing(
+                net,
+                &qcore::account_address(seed, index),
+                Some(&to),
+                nonce,
+                valid_until,
+                head,
+                || {
+                    transfer_with(
+                        seed,
+                        index,
+                        &to,
+                        &amount,
+                        nonce,
+                        &fee,
+                        chain_id,
+                        valid_until,
+                        head,
+                        &genesis,
+                    )
+                },
+            )
         })
     }
 
@@ -945,22 +990,30 @@ impl SeedHandle {
         let genesis = parse_genesis(&genesis_hex).map_err(err)?;
         let net = Network { chain_id, genesis };
         self.with_seed(|seed| {
-            session.signing(net, &qcore::account_address(seed, index), nonce, || {
-                call_with(
-                    seed,
-                    index,
-                    &target,
-                    &args_hex,
-                    nonce,
-                    meter_limit,
-                    &fee,
-                    chain_id,
-                    valid_until,
-                    &transfer_fee,
-                    head,
-                    &genesis,
-                )
-            })
+            session.signing(
+                net,
+                &qcore::account_address(seed, index),
+                Some(&target),
+                nonce,
+                valid_until,
+                head,
+                || {
+                    call_with(
+                        seed,
+                        index,
+                        &target,
+                        &args_hex,
+                        nonce,
+                        meter_limit,
+                        &fee,
+                        chain_id,
+                        valid_until,
+                        &transfer_fee,
+                        head,
+                        &genesis,
+                    )
+                },
+            )
         })
     }
 
@@ -980,18 +1033,26 @@ impl SeedHandle {
         let genesis = parse_genesis(&genesis_hex).map_err(err)?;
         let net = Network { chain_id, genesis };
         self.with_seed(|seed| {
-            session.signing(net, &qcore::account_address(seed, index), nonce, || {
-                register_with(
-                    seed,
-                    index,
-                    nonce,
-                    &fee,
-                    chain_id,
-                    valid_until,
-                    head,
-                    &genesis,
-                )
-            })
+            session.signing(
+                net,
+                &qcore::account_address(seed, index),
+                None,
+                nonce,
+                valid_until,
+                head,
+                || {
+                    register_with(
+                        seed,
+                        index,
+                        nonce,
+                        &fee,
+                        chain_id,
+                        valid_until,
+                        head,
+                        &genesis,
+                    )
+                },
+            )
         })
     }
 
@@ -1016,23 +1077,31 @@ impl SeedHandle {
         let genesis = parse_genesis(&genesis_hex).map_err(err)?;
         let net = Network { chain_id, genesis };
         self.with_seed(|seed| {
-            session.signing(net, &qcore::account_address(seed, index), nonce, || {
-                payable_call_with(
-                    seed,
-                    index,
-                    &target,
-                    &args_hex,
-                    nonce,
-                    meter_limit,
-                    &fee,
-                    &value,
-                    chain_id,
-                    valid_until,
-                    &transfer_fee,
-                    head,
-                    &genesis,
-                )
-            })
+            session.signing(
+                net,
+                &qcore::account_address(seed, index),
+                Some(&target),
+                nonce,
+                valid_until,
+                head,
+                || {
+                    payable_call_with(
+                        seed,
+                        index,
+                        &target,
+                        &args_hex,
+                        nonce,
+                        meter_limit,
+                        &fee,
+                        &value,
+                        chain_id,
+                        valid_until,
+                        &transfer_fee,
+                        head,
+                        &genesis,
+                    )
+                },
+            )
         })
     }
 
@@ -1058,24 +1127,32 @@ impl SeedHandle {
         let genesis = parse_genesis(&genesis_hex).map_err(err)?;
         let net = Network { chain_id, genesis };
         self.with_seed(|seed| {
-            session.signing(net, &qcore::account_address(seed, index), nonce, || {
-                asset_call_with(
-                    seed,
-                    index,
-                    &target,
-                    &args_hex,
-                    &asset_issuer,
-                    &amount,
-                    nonce,
-                    meter_limit,
-                    &fee,
-                    chain_id,
-                    valid_until,
-                    &transfer_fee,
-                    head,
-                    &genesis,
-                )
-            })
+            session.signing(
+                net,
+                &qcore::account_address(seed, index),
+                Some(&target),
+                nonce,
+                valid_until,
+                head,
+                || {
+                    asset_call_with(
+                        seed,
+                        index,
+                        &target,
+                        &args_hex,
+                        &asset_issuer,
+                        &amount,
+                        nonce,
+                        meter_limit,
+                        &fee,
+                        chain_id,
+                        valid_until,
+                        &transfer_fee,
+                        head,
+                        &genesis,
+                    )
+                },
+            )
         })
     }
 }
@@ -1102,9 +1179,14 @@ const SETTLE_BLOCKS: u64 = qcore::MAX_VALIDITY_BLOCKS;
 
 const CHAIN_BLOCKS_PER_SEC: u64 = 5;
 
-const SETTLE_SECS: u64 = qcore::MAX_VALIDITY_BLOCKS.div_ceil(CHAIN_BLOCKS_PER_SEC);
-
 const SETTLE_START_AGE_SECS: u64 = 300;
+
+const SETTLE_SLACK_BLOCKS: u64 = SETTLE_START_AGE_SECS * qcore::HEAD_BLOCKS_PER_SEC;
+
+const SETTLE_SPAN: u64 = SETTLE_BLOCKS + SETTLE_SLACK_BLOCKS;
+
+const SETTLE_SECS: u64 =
+    qcore::MAX_VALIDITY_BLOCKS.div_ceil(CHAIN_BLOCKS_PER_SEC) + SETTLE_START_AGE_SECS;
 
 const SETTLE_DRIFT_SECS: u64 = 120;
 
@@ -1137,6 +1219,12 @@ const EARLIER_FORMAT: &str =
 
 const WHOLE_STATE_BLOCKED: &str =
     "the whole saved nonce state is blocked, reset the nonce state of every account";
+
+const NO_PINNED_ROSTER: &str = "SETTLING no validator roster is pinned for this network, so a roster given by the app is not trusted to carry the settling wait, acknowledge the imported history after authenticating instead";
+
+const NOT_MAINNET: &str = "only an account on the mainnet chain takes a mainnet acknowledgement";
+
+const MAINNET_NOT_ACKNOWLEDGED: &str = "this account is on mainnet, where a transaction moves real value, and mainnet was not acknowledged on this device after authenticating, so the vault does not sign";
 
 const NO_DEVICE_CLOCK: &str = "SETTLING the device gave no reading of the clock that counts time since it started, so the settling wait cannot be measured and the vault does not sign for this account";
 
@@ -1337,6 +1425,12 @@ impl Settle {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct Floor {
+    height: u64,
+    time: u64,
+}
+
 #[derive(Debug, Default)]
 struct Account {
     net: Network,
@@ -1344,6 +1438,8 @@ struct Account {
     nonces: Nonces,
     settle: Option<Settle>,
     known: Option<u64>,
+    floor: Option<Floor>,
+    mainnet: bool,
     seen: Option<(u64, String)>,
     text: Option<u64>,
     blocked: Option<String>,
@@ -1381,6 +1477,8 @@ struct SavedAccount {
     writer: String,
     settle: Option<Settle>,
     known: Option<u64>,
+    floor: Option<Floor>,
+    mainnet: bool,
     nonces: Nonces,
 }
 
@@ -1514,6 +1612,21 @@ fn parse_saved(text: &str) -> Result<SavedAccount, String> {
         None => None,
         Some(value) => Some(parse_settle(value)?),
     };
+    let floor = match doc.get("floor") {
+        None => None,
+        Some(value) => Some(Floor {
+            height: decimal(value.get("height"))
+                .ok_or_else(|| "the saved head floor is not a whole number".to_string())?,
+            time: decimal(value.get("time"))
+                .ok_or_else(|| "the saved head floor time is not a whole number".to_string())?,
+        }),
+    };
+    let mainnet = match doc.get("mainnet") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| "the saved mainnet acknowledgement is not a boolean".to_string())?,
+    };
     Ok(SavedAccount {
         net,
         key: key.to_string(),
@@ -1521,6 +1634,8 @@ fn parse_saved(text: &str) -> Result<SavedAccount, String> {
         writer: writer.to_string(),
         settle,
         known,
+        floor,
+        mainnet,
         nonces: Nonces {
             next,
             held,
@@ -1554,6 +1669,8 @@ struct Record<'a> {
     nonces: &'a Nonces,
     settle: Option<&'a Settle>,
     known: Option<u64>,
+    floor: Option<Floor>,
+    mainnet: bool,
 }
 
 impl<'a> Record<'a> {
@@ -1564,6 +1681,8 @@ impl<'a> Record<'a> {
             nonces: &account.nonces,
             settle: account.settle.as_ref(),
             known: account.known,
+            floor: account.floor,
+            mainnet: account.mainnet,
         }
     }
 
@@ -1604,6 +1723,18 @@ impl<'a> Record<'a> {
         }
         if let Some(settle) = self.settle {
             fields.push(("settle", render_settle(settle)));
+        }
+        if let Some(floor) = self.floor {
+            fields.push((
+                "floor",
+                object(vec![
+                    ("height", Json::str(floor.height.to_string())),
+                    ("time", Json::str(floor.time.to_string())),
+                ]),
+            ));
+        }
+        if self.mainnet {
+            fields.push(("mainnet", Json::Bool(true)));
         }
         object(fields).render()
     }
@@ -1889,6 +2020,33 @@ static NONCE_LEDGER: Mutex<NonceLedger> = Mutex::new(NonceLedger {
     wall: None,
 });
 
+fn chain_name_of(chain_id: u64) -> &'static str {
+    if qcore::chain_id_from_name(qcore::TESTNET_CHAIN_NAME) == chain_id {
+        qcore::TESTNET_CHAIN_NAME
+    } else if chain_id == qcore::MAINNET_CHAIN_ID {
+        qcore::MAINNET_CHAIN_NAME
+    } else {
+        ""
+    }
+}
+
+fn vault_deadline(
+    chain_id: u64,
+    valid_until: u64,
+    head: u64,
+    wall: u64,
+    floor: Option<Floor>,
+) -> Result<(), String> {
+    qcore::bounded_valid_until(
+        chain_name_of(chain_id),
+        head,
+        wall,
+        floor.map(|floor| floor.height),
+        floor.map_or(0, |floor| wall.saturating_sub(floor.time)),
+    )?;
+    qcore::check_valid_until(valid_until, head)
+}
+
 fn elapsed_secs(start: &Start, uptime: Option<&(String, u64)>) -> u64 {
     match uptime {
         Some((boot, now)) if *boot == start.boot && *now >= start.at => (now - start.at) / 1000,
@@ -1905,11 +2063,11 @@ fn settling_refusal(
     match &settle.start {
         None => format!(
             "SETTLING the account {key} on chain {chain_id} has history this device did not sign, from before it kept its nonces or from another device since, so the vault signs for it only after settleHistory is given a fresh verified finality certificate to start the wait, then one at least {} blocks higher once {SETTLE_SECS} seconds have passed on this device, or once that history is acknowledged after authenticating",
-            SETTLE_BLOCKS + 1
+            SETTLE_SPAN + 1
         ),
         Some(start) => format!(
             "SETTLING the account {key} on chain {chain_id} has history this device did not sign, so the vault signs for it after settleHistory is given a verified finality certificate at height {} or later and {} more seconds have passed on this device, or once that history is acknowledged after authenticating",
-            start.height.saturating_add(SETTLE_BLOCKS).saturating_add(1),
+            start.height.saturating_add(SETTLE_SPAN).saturating_add(1),
             SETTLE_SECS.saturating_sub(elapsed_secs(start, uptime))
         ),
     }
@@ -2156,6 +2314,11 @@ impl NonceLedger {
             nonces: &after,
             settle: worst_settle.as_ref(),
             known: Some(u64::MAX),
+            floor: Some(Floor {
+                height: u64::MAX,
+                time: u64::MAX,
+            }),
+            mainnet: true,
             ..Record::of(account)
         }
         .render(u64::MAX, &widest);
@@ -2221,7 +2384,7 @@ impl NonceLedger {
             settle.start = Some(begin(&certified));
             account.settle = Some(settle);
             self.dirty.insert(name);
-            return Ok(NonceSettle::waiting(SETTLE_BLOCKS + 1, SETTLE_SECS));
+            return Ok(NonceSettle::waiting(SETTLE_SPAN + 1, SETTLE_SECS));
         };
         if start.boot != boot || now < start.at {
             start.boot = boot.clone();
@@ -2237,7 +2400,7 @@ impl NonceLedger {
                     settle.start = Some(begin(&certified));
                     account.settle = Some(settle);
                     self.dirty.insert(name);
-                    return Ok(NonceSettle::waiting(SETTLE_BLOCKS + 1, SETTLE_SECS));
+                    return Ok(NonceSettle::waiting(SETTLE_SPAN + 1, SETTLE_SECS));
                 }
                 Err(stale) => {
                     settle.start = None;
@@ -2249,7 +2412,7 @@ impl NonceLedger {
         }
         let blocks_left = start
             .height
-            .saturating_add(SETTLE_BLOCKS)
+            .saturating_add(SETTLE_SPAN)
             .saturating_add(1)
             .saturating_sub(certified.height);
         let secs_left = SETTLE_SECS.saturating_sub(elapsed);
@@ -2292,11 +2455,39 @@ impl NonceLedger {
         Ok(())
     }
 
+    fn acknowledge_mainnet(&mut self, net: Network, key: &str) -> Result<(), String> {
+        check_nonce_key(key)?;
+        if net.chain_id != qcore::MAINNET_CHAIN_ID {
+            return Err(NOT_MAINNET.to_string());
+        }
+        let name = account_name(&net, key);
+        if self.usable(&name)?.is_none() {
+            if self.listed.contains_key(&name) {
+                return Err(format!(
+                    "the saved nonce state of {name} was not read before this acknowledgement, so nothing changed"
+                ));
+            }
+            if self.tracked() >= NONCE_ACCOUNTS_MAX {
+                return Err(TOO_MANY_ACCOUNTS.to_string());
+            }
+            self.accounts
+                .insert(name.clone(), Account::settling_from_scratch(net, key));
+        }
+        if let Some(account) = self.accounts.get_mut(&name) {
+            account.mainnet = true;
+        }
+        self.dirty.insert(name);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn signing(
         &mut self,
         net: Network,
         key: &str,
         nonce: u64,
+        valid_until: u64,
+        head: u64,
         sign: impl FnOnce() -> Result<String, QcoreError>,
     ) -> Result<String, QcoreError> {
         let name = account_name(&net, key);
@@ -2316,12 +2507,26 @@ impl NonceLedger {
                 self.uptime.as_ref(),
             )));
         }
+        if net.chain_id == qcore::MAINNET_CHAIN_ID
+            && !account.is_some_and(|account| account.mainnet)
+        {
+            return Err(err(MAINNET_NOT_ACKNOWLEDGED));
+        }
+        let wall = self.wall();
+        let floor = account.and_then(|account| account.floor);
+        vault_deadline(net.chain_id, valid_until, head, wall, floor).map_err(err)?;
         self.fits_signed(&name, nonce).map_err(err)?;
         let signed = sign()?;
         if let Some(account) = self.accounts.get_mut(&name) {
             account.nonces.signed(nonce);
             let after = nonce.saturating_add(1);
             account.known = Some(account.known.map_or(after, |known| known.max(after)));
+            if account.floor.is_none_or(|floor| head > floor.height) {
+                account.floor = Some(Floor {
+                    height: head,
+                    time: wall,
+                });
+            }
         }
         self.rotate = true;
         self.dirty.insert(name);
@@ -2529,6 +2734,8 @@ impl NonceLedger {
                             let own = saved.writer == me;
                             entry.settle = saved.settle.clone();
                             entry.known = saved.known;
+                            entry.floor = saved.floor;
+                            entry.mainnet = saved.mainnet;
                             entry.nonces = saved.into_nonces(own);
                             entry.seen = Some(written);
                             self.dirty.remove(&name);
@@ -2542,6 +2749,8 @@ impl NonceLedger {
                         if !ours {
                             let own = saved.writer == me;
                             entry.known = saved.known;
+                            entry.floor = saved.floor;
+                            entry.mainnet = saved.mainnet;
                             entry.settle = Some(Settle::default());
                             entry.nonces = saved.into_nonces(own);
                             entry.seen = Some(written);
@@ -2656,6 +2865,49 @@ pub fn acknowledge_imported_history(
     lock(&NONCE_LEDGER).acknowledge(net, &key).map_err(err)
 }
 
+#[uniffi::export]
+pub fn acknowledge_mainnet(
+    chain_id: u64,
+    genesis_hex: String,
+    key: String,
+) -> Result<(), QcoreError> {
+    let net = Network::of(chain_id, &genesis_hex).map_err(err)?;
+    lock(&NONCE_LEDGER)
+        .acknowledge_mainnet(net, &key)
+        .map_err(err)
+}
+
+fn pinned_roster(net: &Network) -> Option<[u8; 32]> {
+    let pins = [
+        (
+            qcore::chain_id_from_name(qcore::TESTNET_CHAIN_NAME),
+            qcore::TESTNET_GENESIS_HASH,
+            qcore::TESTNET_ROSTER_COMMITMENT,
+        ),
+        (
+            qcore::MAINNET_CHAIN_ID,
+            qcore::MAINNET_GENESIS_HASH,
+            qcore::MAINNET_ROSTER_COMMITMENT,
+        ),
+    ];
+    pins.into_iter()
+        .find_map(|(chain_id, genesis, commitment)| {
+            (chain_id == net.chain_id && genesis == Some(net.genesis)).then_some(commitment)
+        })
+        .flatten()
+}
+
+fn pinned_roster_check(roster_json: &str, pin: Option<[u8; 32]>) -> Result<(), String> {
+    let Some(pin) = pin else {
+        return Err(NO_PINNED_ROSTER.to_string());
+    };
+    let roster = qcore::finality::parse_roster(roster_json)?;
+    if qcore::finality::roster_commitment_of(0, &roster) != pin {
+        return Err("the validator roster given is not the one pinned for this network, so its certificates do not count toward the settling wait".to_string());
+    }
+    Ok(())
+}
+
 fn certified(
     net: Network,
     header_hex: &str,
@@ -2689,6 +2941,7 @@ pub fn settle_history(
 ) -> Result<NonceSettle, QcoreError> {
     let net = Network::of(chain_id, &genesis_hex).map_err(err)?;
     check_nonce_key(&key).map_err(err)?;
+    pinned_roster_check(&roster_json, pinned_roster(&net)).map_err(err)?;
     let verified = certified(net, &header_hex, &certificate_hex, &roster_json).map_err(err)?;
     lock(&NONCE_LEDGER)
         .settle_with(net, &key, verified)
@@ -2729,14 +2982,25 @@ impl SigningSession {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn signing(
         &self,
         net: Network,
         key: &str,
+        target: Option<&str>,
         nonce: u64,
+        valid_until: u64,
+        head: u64,
         sign: impl FnOnce() -> Result<String, QcoreError>,
     ) -> Result<String, QcoreError> {
-        lock(self.ledger).signing(net, key, nonce, sign)
+        if let Some(target) = target {
+            lock(&self.book).check_target(target).map_err(err)?;
+        }
+        let signed = lock(self.ledger).signing(net, key, nonce, valid_until, head, sign)?;
+        if let Some(target) = target {
+            lock(&self.book).remember_address(target);
+        }
+        Ok(signed)
     }
 }
 
@@ -3559,6 +3823,170 @@ mod tests {
     }
 
     #[test]
+    fn a_gateway_nonce_below_what_the_session_reached_is_refused_unless_expected() {
+        let session = fresh();
+        let key = address(seed(), 0).expect("derives");
+        for nonce in [5, 6] {
+            session
+                .slot(1, g(), key.clone(), nonce, None, false)
+                .expect("free");
+            session.signed(1, g(), key.clone(), nonce).expect("signed");
+            session
+                .outcome(1, g(), key.clone(), nonce, true)
+                .expect("recorded");
+        }
+        let refused = session
+            .slot(1, g(), key.clone(), 5, None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("below the 7"), "{refused}");
+        assert_eq!(
+            session
+                .slot(1, g(), key.clone(), 5, Some(5), false)
+                .expect("asked for"),
+            5
+        );
+    }
+
+    #[test]
+    fn the_vault_bounds_the_head_by_the_device_clock_and_a_floor_that_never_falls() {
+        let ledger = fresh_ledger();
+        let session = session_on(ledger);
+        let held = handle();
+        let key = address(seed(), 0).expect("derives");
+        let wall = 1_800_000_000;
+        lock(ledger).wall = Some(wall);
+        let ceiling = qcore::head_ceiling("", wall);
+        let pay = |nonce: u64, head: u64, valid_until: u64| {
+            session
+                .slot(1, g(), key.clone(), nonce, Some(nonce), false)
+                .expect("slot");
+            let out = held.sign_transfer(
+                session.clone(),
+                0,
+                address(seed(), 9).expect("derives"),
+                "5".to_string(),
+                nonce,
+                "1".to_string(),
+                1,
+                valid_until,
+                head,
+                g(),
+            );
+            if out.is_err() {
+                session
+                    .release(1, g(), key.clone(), nonce)
+                    .expect("released");
+            }
+            out.map_err(|refused| refused.to_string())
+        };
+        let near = (1u64 << 40) - 1;
+        assert!(pay(0, near, near + max_validity_blocks())
+            .unwrap_err()
+            .contains("wall-clock"));
+        assert!(pay(0, ceiling + 1, ceiling + 300).is_err());
+        let head = ceiling - 10_000;
+        assert!(pay(0, head, head + 300).is_ok());
+        let floor = lock(ledger)
+            .accounts
+            .get(&account_name(&net(1), &key))
+            .and_then(|account| account.floor);
+        assert_eq!(
+            floor,
+            Some(Floor {
+                height: head,
+                time: wall
+            })
+        );
+        assert!(pay(1, head - 1, head + 300).unwrap_err().contains("below"));
+        assert!(pay(1, head + 10_000, head + 10_300)
+            .unwrap_err()
+            .contains("leapt"));
+        lock(ledger).wall = Some(wall + 10);
+        assert!(pay(1, head + 200, head + 500).is_ok());
+        let account = &lock(ledger).accounts[&account_name(&net(1), &key)];
+        let saved = parse_saved(&Record::of(account).render(1, "0123456789abcdef")).expect("saved");
+        assert_eq!(
+            saved.floor,
+            Some(Floor {
+                height: head + 200,
+                time: wall + 10
+            })
+        );
+    }
+
+    #[test]
+    fn the_vault_signs_on_mainnet_only_after_a_native_acknowledgement() {
+        let ledger = fresh_ledger();
+        let session = session_on(ledger);
+        let key = address(seed(), 0).expect("derives");
+        let mainnet = qcore::MAINNET_CHAIN_ID;
+        let pinned = "44".repeat(32);
+        let pay = || {
+            session
+                .slot(mainnet, pinned.clone(), key.clone(), 0, Some(0), false)
+                .expect("slot");
+            handle().sign_transfer(
+                session.clone(),
+                0,
+                address(seed(), 9).expect("derives"),
+                "5".to_string(),
+                0,
+                "1".to_string(),
+                mainnet,
+                1_300,
+                1_000,
+                pinned.clone(),
+            )
+        };
+        assert!(pay().unwrap_err().to_string().contains("mainnet"));
+        let on = |chain: u64| Network::of(chain, &pinned).expect("a network");
+        assert!(lock(ledger).acknowledge_mainnet(on(1), &key).is_err());
+        lock(ledger)
+            .acknowledge_mainnet(on(mainnet), &key)
+            .expect("acknowledged");
+        lock(ledger)
+            .accounts
+            .get_mut(&account_name(&on(mainnet), &key))
+            .expect("tracked")
+            .settle = None;
+        assert!(pay().is_ok());
+        let summary = signing_summary(
+            "transfer".to_string(),
+            mainnet,
+            "Q1\u{200b}ABC".to_string(),
+            "5".to_string(),
+            "1".to_string(),
+            String::new(),
+        )
+        .expect("summary");
+        assert!(summary.contains("Send 5 Quon to Q1ABC"), "{summary}");
+        assert!(summary.contains("Mainnet"), "{summary}");
+        assert!(signing_summary(
+            "reveal".to_string(),
+            1,
+            String::new(),
+            "0".to_string(),
+            "1".to_string(),
+            String::new()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn only_a_pinned_roster_carries_the_settling_wait() {
+        let roster = tx_roster(TX_ATTEST_PK);
+        let members = qcore::finality::parse_roster(&roster).expect("roster");
+        let pin = qcore::finality::roster_commitment_of(0, &members);
+        assert!(pinned_roster_check(&roster, Some(pin)).is_ok());
+        assert!(pinned_roster_check(&roster, Some([7u8; 32])).is_err());
+        assert!(pinned_roster_check(&roster, None)
+            .unwrap_err()
+            .contains("no validator roster is pinned"));
+        assert_eq!(pinned_roster(&net(7)), None);
+    }
+
+    #[test]
     fn the_session_keeps_an_address_book_of_real_addresses() {
         let first = address(seed(), 0).expect("derives");
         let second = address(seed(), 1).expect("derives");
@@ -4374,6 +4802,8 @@ mod tests {
                 nonces: &Nonces::default(),
                 settle: current.settle.as_ref(),
                 known: current.known,
+                floor: current.floor,
+                mainnet: current.mainnet,
             }
             .render(current.generation, "0123456789abcdef"),
         );
@@ -4425,6 +4855,8 @@ mod tests {
                 nonces: &fake,
                 settle: None,
                 known: None,
+                floor: None,
+                mainnet: false,
             }
             .render(1, "0123456789abcdef"),
         );
@@ -4539,7 +4971,7 @@ mod tests {
         let chain = 1;
         let wall = 1_800_000_000;
         let height = 1_000_000;
-        assert_eq!(SETTLE_SECS, 720);
+        assert_eq!(SETTLE_SECS, 1_020);
         let pay_at = |app: &App, disk: &mut Disk, nonce: u64, head: u64| {
             let to = address(seed(), 9).expect("derives");
             app.recorded(disk, chain, &me, || {
@@ -4594,7 +5026,7 @@ mod tests {
         assert!(stale.contains("fresh"), "{stale}");
         assert_eq!(
             settle(&app, &mut disk, height, wall - 5).expect("starts"),
-            NonceSettle::waiting(SETTLE_BLOCKS + 1, SETTLE_SECS)
+            NonceSettle::waiting(SETTLE_SPAN + 1, SETTLE_SECS)
         );
         let manifest =
             parse_manifest(disk.manifest.as_deref().expect("a manifest")).expect("reads");
@@ -4616,20 +5048,20 @@ mod tests {
             .slot(&mut disk, chain, &me, 5, Some(5))
             .expect("asked for");
         assert_eq!(
-            settle(&restarted, &mut disk, height + SETTLE_BLOCKS + 1, wall + 60).expect("waits"),
+            settle(&restarted, &mut disk, height + SETTLE_SPAN + 1, wall + 60).expect("waits"),
             NonceSettle::waiting(0, SETTLE_SECS - 60),
             "a height past the window does not end it before the device has counted the time"
         );
         clocks(&restarted, &mut disk, "boot-a", 61_000, wall + 100_000);
         assert!(
-            !settle(&restarted, &mut disk, height + SETTLE_BLOCKS + 1, wall + 60)
+            !settle(&restarted, &mut disk, height + SETTLE_SPAN + 1, wall + 60)
                 .expect("waits")
                 .settled,
             "a wall clock moved forward does not count toward the wait"
         );
         clocks(&restarted, &mut disk, "boot-b", 5_000, wall + 2_000);
         assert_eq!(
-            settle(&restarted, &mut disk, height + SETTLE_BLOCKS + 1, wall + 61).expect("waits"),
+            settle(&restarted, &mut disk, height + SETTLE_SPAN + 1, wall + 61).expect("waits"),
             NonceSettle::waiting(0, SETTLE_SECS),
             "after a reboot the time on the device is counted again"
         );
@@ -4641,21 +5073,15 @@ mod tests {
             wall + 2_000,
         );
         assert_eq!(
-            settle(&restarted, &mut disk, height + SETTLE_BLOCKS, wall + 700).expect("waits"),
+            settle(&restarted, &mut disk, height + SETTLE_SPAN, wall + 700).expect("waits"),
             NonceSettle::waiting(1, 0)
         );
         assert!(
-            pay_at(&restarted, &mut disk, 5, height + SETTLE_BLOCKS + 1).is_err(),
+            pay_at(&restarted, &mut disk, 5, height + SETTLE_SPAN + 1).is_err(),
             "the signer never ends the wait with the head it is given"
         );
         assert_eq!(
-            settle(
-                &restarted,
-                &mut disk,
-                height + SETTLE_BLOCKS + 1,
-                wall + 720
-            )
-            .expect("ends"),
+            settle(&restarted, &mut disk, height + SETTLE_SPAN + 1, wall + 720).expect("ends"),
             NonceSettle::done()
         );
         assert!(pay_at(&restarted, &mut disk, 5, height + 4_000).is_ok());
@@ -4675,7 +5101,7 @@ mod tests {
         late.sync(&stale_start, chain, &me);
         assert_eq!(
             settle_at(&late, chain, &me, height + 9_000, wall + 1_000).expect("restarts"),
-            NonceSettle::waiting(SETTLE_BLOCKS + 1, SETTLE_SECS),
+            NonceSettle::waiting(SETTLE_SPAN + 1, SETTLE_SECS),
             "a start that chain time shows was older than the device time counted is replaced by the fresher certificate"
         );
 
@@ -4985,13 +5411,13 @@ mod tests {
         }
         assert_eq!(
             settle(SETTLE_START_HEADER, SETTLE_START_CERTIFICATE).expect("starts"),
-            NonceSettle::waiting(SETTLE_BLOCKS + 1, SETTLE_SECS)
+            NonceSettle::waiting(SETTLE_SPAN + 1, SETTLE_SECS)
         );
         lock(ledger).uptime = Some(("boot".to_string(), 1_000 + SETTLE_SECS * 1_000));
         lock(ledger).wall = Some(1_800_000_750);
         assert_eq!(
             settle(SETTLE_SHORT_HEADER, SETTLE_SHORT_CERTIFICATE).expect("waits"),
-            NonceSettle::waiting(1, 0),
+            NonceSettle::waiting(SETTLE_SLACK_BLOCKS + 1, 0),
             "a certificate one block short of the window does not end it"
         );
         assert!(
@@ -4999,7 +5425,20 @@ mod tests {
             "a certificate that does not verify does not count"
         );
         assert_eq!(
-            settle(SETTLE_END_HEADER, SETTLE_END_CERTIFICATE).expect("ends"),
+            settle(SETTLE_END_HEADER, SETTLE_END_CERTIFICATE).expect("waits"),
+            NonceSettle::waiting(SETTLE_SLACK_BLOCKS, 0),
+            "a certificate past the validity window but inside the certificate age slack does not end it"
+        );
+        let end = certified(net(7), SETTLE_END_HEADER, SETTLE_END_CERTIFICATE, &roster)
+            .expect("verifies");
+        assert_eq!(
+            lock(ledger)
+                .settle_with(
+                    net(7),
+                    &key,
+                    certified_at(end.height + SETTLE_SLACK_BLOCKS, end.time)
+                )
+                .expect("ends"),
             NonceSettle::done()
         );
         assert!(lock(ledger)
@@ -5058,7 +5497,7 @@ mod tests {
             held.uptime = Some(("boot".to_string(), 0));
             assert_eq!(
                 held.settle_with(net(7), &key, verified).expect("starts"),
-                NonceSettle::waiting(SETTLE_BLOCKS + 1, SETTLE_SECS)
+                NonceSettle::waiting(SETTLE_SPAN + 1, SETTLE_SECS)
             );
             assert!(held
                 .settle_with(net(7), "order:Q1UNKNOWN", verified)
