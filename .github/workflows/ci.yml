@@ -35,6 +35,18 @@ jobs:
       - name: test
         working-directory: react-native-qcore
         run: cargo test --all-features --locked
+      - name: fuzz
+        working-directory: react-native-qcore
+        run: FUZZ_ITERS=2000000 FUZZ_SEED="$GITHUB_RUN_NUMBER" cargo test --release --locked --test fuzz -- --ignored
+      - name: software bill of materials
+        working-directory: react-native-qcore
+        run: cargo metadata --format-version 1 --locked > "$RUNNER_TEMP/sbom.cargo.json"
+      - name: keep the bill of materials
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: react-native-qcore-sbom
+          if-no-files-found: error
+          path: ${{ runner.temp }}/sbom.cargo.json
       - name: deny
         working-directory: react-native-qcore
         run: |
