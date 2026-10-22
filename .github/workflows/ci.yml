@@ -40,6 +40,147 @@ jobs:
         run: |
           cargo install --locked cargo-deny --version 0.19.9
           cargo deny check bans licenses sources advisories
+  typescript:
+    name: typescript
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: react-native-qcore
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: tsc
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/tools"
+          npm install --prefix "$tools" --no-save --no-package-lock --no-audit --no-fund --ignore-scripts typescript@5.9.3 react-native@0.83.10
+          cat > "$RUNNER_TEMP/tsconfig.json" <<JSON
+          {
+            "extends": "$GITHUB_WORKSPACE/react-native-qcore/tsconfig.json",
+            "compilerOptions": {
+              "noEmit": true,
+              "baseUrl": "$RUNNER_TEMP",
+              "types": [],
+              "paths": { "react-native": ["$tools/node_modules/react-native"] }
+            },
+            "include": ["$GITHUB_WORKSPACE/react-native-qcore/ts"]
+          }
+          JSON
+          "$tools/node_modules/.bin/tsc" -p "$RUNNER_TEMP/tsconfig.json"
+
+  android:
+    name: android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: react-native-qcore
+          persist-credentials: false
+      - name: rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+      - name: kotlin bindings
+        working-directory: react-native-qcore
+        run: bash scripts/generate-bindings.sh
+      - name: gradle
+        run: |
+          set -euo pipefail
+          ver=9.0.0
+          curl -sSfL "https://services.gradle.org/distributions/gradle-${ver}-bin.zip" -o "$RUNNER_TEMP/gradle.zip"
+          echo "8fad3d78296ca518113f3d29016617c7f9367dc005f932bd9d93bf45ba46072b  $RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-${ver}/bin" >> "$GITHUB_PATH"
+      - name: gradle build
+        run: |
+          set -euo pipefail
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          host="$RUNNER_TEMP/gradle-host"
+          mkdir -p "$host"
+          cat > "$host/settings.gradle" <<GRADLE
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          include(":react-native-qcore")
+          project(":react-native-qcore").projectDir = new File("$GITHUB_WORKSPACE/react-native-qcore/android")
+          GRADLE
+          cat > "$host/build.gradle" <<'GRADLE'
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath("com.android.tools.build:gradle:8.12.0")
+                  classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.20")
+              }
+          }
+          subprojects {
+              configurations.configureEach {
+                  resolutionStrategy.eachDependency { details ->
+                      if (details.requested.group == "com.facebook.react" && details.requested.name == "react-android") {
+                          details.useVersion("0.83.10")
+                      }
+                  }
+              }
+          }
+          GRADLE
+          printf 'android.useAndroidX=true\norg.gradle.jvmargs=-Xmx3g\n' > "$host/gradle.properties"
+          gradle -p "$host" --no-daemon :react-native-qcore:assembleRelease
+
+  xcode:
+    name: xcode
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: react-native-qcore
+          persist-credentials: false
+      - name: rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --target aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          rustup default 1.98.0
+      - name: native library
+        working-directory: react-native-qcore
+        run: bash scripts/build-ios.sh
+      - name: xcode build
+        working-directory: react-native-qcore
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/xcode"
+          mkdir -p "$work/headers" "$work/Sources/QcoreCheck"
+          cp ios/generated/quantova_qcoreFFI.h "$work/headers/"
+          cp ios/generated/quantova_qcoreFFI.modulemap "$work/headers/module.modulemap"
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/libquantova_qcore.a -headers "$work/headers" \
+            -library target/ios-simulator/libquantova_qcore.a -headers "$work/headers" \
+            -output "$work/quantova_qcoreFFI.xcframework"
+          cp ios/Qcore.swift ios/generated/quantova_qcore.swift "$work/Sources/QcoreCheck/"
+          cat > "$work/Package.swift" <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "QcoreCheck",
+              platforms: [.iOS(.v13)],
+              products: [.library(name: "QcoreCheck", targets: ["QcoreCheck"])],
+              targets: [
+                  .binaryTarget(name: "quantova_qcoreFFI", path: "quantova_qcoreFFI.xcframework"),
+                  .target(name: "QcoreCheck", dependencies: ["quantova_qcoreFFI"], path: "Sources/QcoreCheck"),
+              ]
+          )
+          SWIFT
+          cd "$work"
+          for destination in "generic/platform=iOS" "generic/platform=iOS Simulator"; do
+            xcodebuild -scheme QcoreCheck -destination "$destination" -derivedDataPath "$work/derived" build
+          done
+
   secrets:
     name: secrets
     runs-on: ubuntu-24.04

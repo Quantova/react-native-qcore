@@ -12,6 +12,8 @@
     "build:android": "bash scripts/build-android.sh",
     "build:ios": "bash scripts/build-ios.sh",
     "build:ts": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "cargo test --all-features --locked",
     "verify:binaries": "bash scripts/verify-binaries.sh",
     "prepublishOnly": "bash scripts/verify-binaries.sh --publish"
   },
