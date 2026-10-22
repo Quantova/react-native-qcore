@@ -15,6 +15,7 @@ android {
     defaultConfig {
         minSdkVersion qcoreConfig("minSdkVersion", 24)
         targetSdkVersion qcoreConfig("targetSdkVersion", 35)
+        consumerProguardFiles "consumer-rules.pro"
     }
 
     compileOptions {

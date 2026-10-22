@@ -47,6 +47,7 @@
   "files": [
     "ts",
     "android/build.gradle",
+    "android/consumer-rules.pro",
     "android/src",
     "ios/Qcore.swift",
     "ios/Qcore.mm",
