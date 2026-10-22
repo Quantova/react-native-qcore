@@ -669,10 +669,60 @@ fn parse_genesis(genesis_hex: &str) -> Result<[u8; 32], String> {
     Ok(genesis)
 }
 
+fn epoch_length_for(chain_id: u64, given: Option<u64>) -> Result<u64, String> {
+    let pinned = if chain_id == qcore::testnet_chain_id() {
+        qcore::TESTNET_EPOCH_LENGTH
+    } else if chain_id == qcore::MAINNET_CHAIN_ID {
+        qcore::MAINNET_EPOCH_LENGTH
+    } else {
+        None
+    };
+    match (pinned, given) {
+        (Some(pinned), Some(given)) if pinned != given => Err(format!(
+            "this network has epochs of {pinned} blocks, not the {given} given"
+        )),
+        (Some(pinned), _) => Ok(pinned),
+        (None, Some(given)) if given > 0 => Ok(given),
+        _ => Err("no epoch length is known for this network, pass the epoch length it uses so a roster certifies only headers of its own epoch".to_string()),
+    }
+}
+
+fn epoch_roster(roster_json: &str, epoch: u64) -> Result<qcore::finality::VerifiedRoster, String> {
+    Ok(qcore::finality::VerifiedRoster {
+        epoch,
+        members: qcore::finality::parse_roster(roster_json)?,
+    })
+}
+
+fn finalized_in_epoch(
+    chain_id: u64,
+    genesis: &[u8; 32],
+    epoch_length: Option<u64>,
+    roster_epoch: u64,
+    header: &[u8],
+    certificate: &[u8],
+    roster_json: &str,
+) -> Result<qcore::finality::FinalizedHeader, String> {
+    let length = epoch_length_for(chain_id, epoch_length)?;
+    let roster = epoch_roster(roster_json, roster_epoch)?;
+    if let Ok(height) = qcore::finality::header_height(header) {
+        let epoch = qcore::finality::epoch_of(height, length)?;
+        if epoch != roster.epoch {
+            return Err(format!(
+                "the header at height {height} lies in epoch {epoch} but the roster given is trusted for epoch {}, refusing a roster from another epoch",
+                roster.epoch
+            ));
+        }
+    }
+    qcore::finality::verify_finality(chain_id, genesis, header, certificate, &roster.members)
+}
+
 #[uniffi::export]
 pub fn verify_finality(
     chain_id: u64,
     genesis_hex: String,
+    epoch_length: Option<u64>,
+    roster_epoch: u64,
     header_hex: String,
     certificate_hex: String,
     roster_json: String,
@@ -680,10 +730,16 @@ pub fn verify_finality(
     let genesis = parse_genesis(&genesis_hex).map_err(err)?;
     let header = from_hex(&header_hex).map_err(err)?;
     let certificate = from_hex(&certificate_hex).map_err(err)?;
-    let roster = qcore::finality::parse_roster(&roster_json).map_err(err)?;
-    let verified =
-        qcore::finality::verify_finality(chain_id, &genesis, &header, &certificate, &roster)
-            .map_err(err)?;
+    let verified = finalized_in_epoch(
+        chain_id,
+        &genesis,
+        epoch_length,
+        roster_epoch,
+        &header,
+        &certificate,
+        &roster_json,
+    )
+    .map_err(err)?;
     Ok(finalized_json(&verified))
 }
 
@@ -720,14 +776,24 @@ pub fn verify_transaction(
     ))
 }
 
-fn confirmed(
+struct Included {
+    height: u64,
+    index: u64,
+    leaf: Vec<u8>,
+    header: qcore::finality::FinalizedHeader,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn included(
     chain_id: u64,
     genesis_hex: &str,
+    epoch_length: Option<u64>,
+    roster_epoch: u64,
     tx_id: &str,
     proof_json: &str,
     finality_json: &str,
     roster_json: &str,
-) -> Result<String, String> {
+) -> Result<Included, String> {
     let genesis = parse_genesis(genesis_hex)?;
     let proof = qcore::json::parse(proof_json)?;
     let height = proof
@@ -762,28 +828,94 @@ fn confirmed(
             .and_then(Json::as_str)
             .ok_or("the finality answer carries no certificate")?,
     )?;
-    let roster = qcore::finality::parse_roster(roster_json)?;
-    let verified =
-        qcore::finality::verify_finality(chain_id, &genesis, &header, &certificate, &roster)?;
+    let verified = finalized_in_epoch(
+        chain_id,
+        &genesis,
+        epoch_length,
+        roster_epoch,
+        &header,
+        &certificate,
+        roster_json,
+    )?;
     if verified.height != height {
         return Err("the finalized header is not at the height the proof names".to_string());
     }
     if !qcore::finality::verify_transaction(&verified.transaction_root, tx_id, &leaf, &steps) {
         return Err("the transaction is not proven inside the finalized block".to_string());
     }
-    Ok(object(vec![
+    if !qcore::finality::index_fits_path(index, &steps) {
+        return Err("the transaction is not at the position the proof names".to_string());
+    }
+    Ok(Included {
+        height,
+        index,
+        leaf,
+        header: verified,
+    })
+}
+
+fn settled_kind(tx_id: &str, leaf: &[u8], calls: bool) -> Result<bool, String> {
+    let call = qcore::finality::transaction_kind(leaf)? == qcore::finality::TxKind::Call;
+    if call && !calls {
+        return Err(format!(
+            "{tx_id} is a contract call, which the chain includes and charges even when it reverts, so inclusion does not prove it ran, prove the event it emits or use confirmInclusion for inclusion alone"
+        ));
+    }
+    Ok(call)
+}
+
+fn rendered(tx_id: &str, found: &Included, call: bool) -> String {
+    object(vec![
         ("tx_id", Json::str(tx_id)),
-        ("height", Json::str(height.to_string())),
-        ("index", Json::str(index.to_string())),
-        ("header", finalized_object(&verified)),
+        ("height", Json::str(found.height.to_string())),
+        ("index", Json::str(found.index.to_string())),
+        ("kind", Json::str(if call { "call" } else { "transfer" })),
+        (
+            "outcome",
+            Json::str(if call {
+                "included-outcome-unproven"
+            } else {
+                "applied"
+            }),
+        ),
+        ("header", finalized_object(&found.header)),
     ])
-    .render())
+    .render()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn confirmed(
+    chain_id: u64,
+    genesis_hex: &str,
+    epoch_length: Option<u64>,
+    roster_epoch: u64,
+    tx_id: &str,
+    proof_json: &str,
+    finality_json: &str,
+    roster_json: &str,
+    calls: bool,
+) -> Result<String, String> {
+    let found = included(
+        chain_id,
+        genesis_hex,
+        epoch_length,
+        roster_epoch,
+        tx_id,
+        proof_json,
+        finality_json,
+        roster_json,
+    )?;
+    let call = settled_kind(tx_id, &found.leaf, calls)?;
+    Ok(rendered(tx_id, &found, call))
 }
 
 #[uniffi::export]
+#[allow(clippy::too_many_arguments)]
 pub fn confirm_transaction(
     chain_id: u64,
     genesis_hex: String,
+    epoch_length: Option<u64>,
+    roster_epoch: u64,
     tx_id: String,
     proof_json: String,
     finality_json: String,
@@ -792,10 +924,39 @@ pub fn confirm_transaction(
     confirmed(
         chain_id,
         &genesis_hex,
+        epoch_length,
+        roster_epoch,
         &tx_id,
         &proof_json,
         &finality_json,
         &roster_json,
+        false,
+    )
+    .map_err(err)
+}
+
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn confirm_inclusion(
+    chain_id: u64,
+    genesis_hex: String,
+    epoch_length: Option<u64>,
+    roster_epoch: u64,
+    tx_id: String,
+    proof_json: String,
+    finality_json: String,
+    roster_json: String,
+) -> Result<String, QcoreError> {
+    confirmed(
+        chain_id,
+        &genesis_hex,
+        epoch_length,
+        roster_epoch,
+        &tx_id,
+        &proof_json,
+        &finality_json,
+        &roster_json,
+        true,
     )
     .map_err(err)
 }
@@ -1177,7 +1338,7 @@ const BOOT_MAX: usize = 64;
 
 const SETTLE_BLOCKS: u64 = qcore::MAX_VALIDITY_BLOCKS;
 
-const CHAIN_BLOCKS_PER_SEC: u64 = 5;
+const CHAIN_BLOCKS_PER_SEC: u64 = qcore::TESTNET_BLOCKS_PER_SEC;
 
 const SETTLE_START_AGE_SECS: u64 = 300;
 
@@ -2030,6 +2191,16 @@ fn chain_name_of(chain_id: u64) -> &'static str {
     }
 }
 
+fn vault_clock(chain_id: u64) -> Option<qcore::ChainClock> {
+    match chain_name_of(chain_id) {
+        "" => Some(qcore::ChainClock {
+            genesis_secs: qcore::GENESIS_FLOOR_SECS,
+            blocks_per_sec: qcore::HEAD_BLOCKS_PER_SEC,
+        }),
+        name => qcore::known_clock(name),
+    }
+}
+
 fn vault_deadline(
     chain_id: u64,
     valid_until: u64,
@@ -2037,8 +2208,9 @@ fn vault_deadline(
     wall: u64,
     floor: Option<Floor>,
 ) -> Result<(), String> {
-    qcore::bounded_valid_until(
-        chain_name_of(chain_id),
+    qcore::bounded_valid_until_for(
+        vault_clock(chain_id).as_ref(),
+        false,
         head,
         wall,
         floor.map(|floor| floor.height),
@@ -2910,19 +3082,21 @@ fn pinned_roster_check(roster_json: &str, pin: Option<[u8; 32]>) -> Result<(), S
 
 fn certified(
     net: Network,
+    epoch_length: Option<u64>,
     header_hex: &str,
     certificate_hex: &str,
     roster_json: &str,
 ) -> Result<Certified, String> {
     let header = from_hex(header_hex)?;
     let certificate = from_hex(certificate_hex)?;
-    let roster = qcore::finality::parse_roster(roster_json)?;
-    let verified = qcore::finality::verify_finality(
+    let verified = finalized_in_epoch(
         net.chain_id,
         &net.genesis,
+        epoch_length,
+        0,
         &header,
         &certificate,
-        &roster,
+        roster_json,
     )?;
     Ok(Certified {
         height: verified.height,
@@ -2942,7 +3116,8 @@ pub fn settle_history(
     let net = Network::of(chain_id, &genesis_hex).map_err(err)?;
     check_nonce_key(&key).map_err(err)?;
     pinned_roster_check(&roster_json, pinned_roster(&net)).map_err(err)?;
-    let verified = certified(net, &header_hex, &certificate_hex, &roster_json).map_err(err)?;
+    let verified =
+        certified(net, None, &header_hex, &certificate_hex, &roster_json).map_err(err)?;
     lock(&NONCE_LEDGER)
         .settle_with(net, &key, verified)
         .map_err(err)
@@ -3715,22 +3890,22 @@ mod tests {
         let ceiling = head_ceiling(chain.clone(), wall);
         assert_eq!(ceiling, qcore::head_ceiling(&chain, wall));
         assert_eq!(
-            bounded_valid_until(chain.clone(), 1_000, wall, None, 0).expect("a plausible head"),
-            1_000 + default_validity_blocks()
+            bounded_valid_until(chain.clone(), 500, wall, None, 0).expect("a plausible head"),
+            500 + default_validity_blocks()
         );
         assert!(
             bounded_valid_until(chain.clone(), ceiling + 1, wall, None, 0).is_err(),
             "a head ahead of the wall clock is refused"
         );
         assert!(
-            bounded_valid_until(chain.clone(), 1_000, wall, Some(1_001), 5).is_err(),
+            bounded_valid_until(chain.clone(), 500, wall, Some(501), 5).is_err(),
             "a head that went backwards is refused"
         );
         assert!(
-            bounded_valid_until(chain.clone(), 1_000, wall, Some(10), 0).is_err(),
+            bounded_valid_until(chain.clone(), 500, wall, Some(10), 0).is_err(),
             "a head that leapt faster than blocks are made is refused"
         );
-        assert!(bounded_valid_until(chain, 1_000, wall, Some(990), 5).is_ok());
+        assert!(bounded_valid_until(chain, 500, wall, Some(490), 5).is_ok());
     }
 
     #[test]
@@ -3916,7 +4091,7 @@ mod tests {
     }
 
     #[test]
-    fn the_vault_signs_on_mainnet_only_after_a_native_acknowledgement() {
+    fn the_vault_refuses_mainnet_without_an_acknowledgement_and_an_unverified_mainnet_head() {
         let ledger = fresh_ledger();
         let session = session_on(ledger);
         let key = address(seed(), 0).expect("derives");
@@ -3950,7 +4125,8 @@ mod tests {
             .get_mut(&account_name(&on(mainnet), &key))
             .expect("tracked")
             .settle = None;
-        assert!(pay().is_ok());
+        let unbounded = pay().unwrap_err().to_string();
+        assert!(unbounded.contains("neither verified"), "{unbounded}");
         let summary = signing_summary(
             "transfer".to_string(),
             mainnet,
@@ -3984,6 +4160,76 @@ mod tests {
             .unwrap_err()
             .contains("no validator roster is pinned"));
         assert_eq!(pinned_roster(&net(7)), None);
+    }
+
+    #[test]
+    fn a_roster_certifies_only_headers_of_its_own_epoch() {
+        let roster = tx_roster(TX_ATTEST_PK);
+        let check = |length: Option<u64>, epoch: u64| {
+            verify_finality(
+                7,
+                TX_GENESIS.to_string(),
+                length,
+                epoch,
+                TX_HEADER.to_string(),
+                TX_CERTIFICATE.to_string(),
+                roster.clone(),
+            )
+            .map_err(|refused| refused.to_string())
+        };
+        assert!(check(Some(65_536), 0).is_ok());
+        assert!(check(Some(1_000), 0).unwrap_err().contains("another epoch"));
+        assert!(check(Some(1_000), 4).is_ok());
+        assert!(check(None, 0).unwrap_err().contains("epoch length"));
+        let testnet = qcore::testnet_chain_id();
+        assert!(epoch_length_for(testnet, Some(1_000)).is_err());
+        assert_eq!(epoch_length_for(testnet, None), Ok(65_536));
+    }
+
+    #[test]
+    fn inclusion_proves_a_transfer_but_not_that_a_contract_call_ran() {
+        let tx_bytes = |signed: String| {
+            let parsed = qcore::json::parse(&signed).expect("json");
+            from_hex(parsed.get("tx_hex").and_then(Json::as_str).expect("tx")).expect("hex")
+        };
+        let to = address(seed(), 1).expect("derives");
+        let transfer = tx_bytes(
+            sign_transfer(
+                seed(),
+                0,
+                to.clone(),
+                "5".to_string(),
+                0,
+                "1".to_string(),
+                1,
+                300,
+                0,
+                g(),
+            )
+            .expect("signs"),
+        );
+        let call = tx_bytes(
+            sign_call(
+                seed(),
+                0,
+                to,
+                String::new(),
+                0,
+                21_000,
+                "500".to_string(),
+                1,
+                300,
+                "500".to_string(),
+                0,
+                g(),
+            )
+            .expect("signs"),
+        );
+        assert_eq!(settled_kind("t", &transfer, false), Ok(false));
+        assert!(settled_kind("c", &call, false)
+            .unwrap_err()
+            .contains("contract call"));
+        assert_eq!(settled_kind("c", &call, true), Ok(true));
     }
 
     #[test]
@@ -5401,7 +5647,7 @@ mod tests {
             .slot(7, g(), key.clone(), 3, None, false)
             .expect("free");
         let settle = |header: &str, certificate: &str| {
-            let verified = certified(net(7), header, certificate, &roster)?;
+            let verified = certified(net(7), Some(65_536), header, certificate, &roster)?;
             lock(ledger).settle_with(net(7), &key, verified)
         };
         {
@@ -5429,8 +5675,14 @@ mod tests {
             NonceSettle::waiting(SETTLE_SLACK_BLOCKS, 0),
             "a certificate past the validity window but inside the certificate age slack does not end it"
         );
-        let end = certified(net(7), SETTLE_END_HEADER, SETTLE_END_CERTIFICATE, &roster)
-            .expect("verifies");
+        let end = certified(
+            net(7),
+            Some(65_536),
+            SETTLE_END_HEADER,
+            SETTLE_END_CERTIFICATE,
+            &roster,
+        )
+        .expect("verifies");
         assert_eq!(
             lock(ledger)
                 .settle_with(
@@ -5458,6 +5710,7 @@ mod tests {
             .expect("free");
         let verified = certified(
             Network::of(7, TX_GENESIS).expect("a network"),
+            Some(65_536),
             TX_HEADER,
             TX_CERTIFICATE,
             &roster,
@@ -5466,6 +5719,7 @@ mod tests {
         assert_eq!((verified.height, verified.time), (4242, 1_800_000_000));
         assert!(certified(
             Network::of(7, &"aa".repeat(32)).expect("a network"),
+            Some(65_536),
             TX_HEADER,
             TX_CERTIFICATE,
             &roster
@@ -5473,6 +5727,7 @@ mod tests {
         .is_err());
         assert!(certified(
             Network::of(8, TX_GENESIS).expect("a network"),
+            Some(65_536),
             TX_HEADER,
             TX_CERTIFICATE,
             &roster
@@ -5481,6 +5736,7 @@ mod tests {
         assert!(Network::of(7, &"00".repeat(32)).is_err());
         assert!(certified(
             net(7),
+            Some(65_536),
             TX_HEADER,
             &tx_flip(TX_CERTIFICATE, 2 * 315),
             &roster
@@ -5882,6 +6138,8 @@ mod tests {
             verify_finality(
                 1,
                 "ab".repeat(32),
+                Some(65_536),
+                0,
                 header.to_string(),
                 certificate.to_string(),
                 roster,
@@ -5995,6 +6253,8 @@ mod tests {
             verify_finality(
                 7,
                 TX_GENESIS.to_string(),
+                Some(65_536),
+                0,
                 TX_HEADER.to_string(),
                 certificate.to_string(),
                 roster,
@@ -6040,6 +6300,8 @@ mod tests {
         let refused = confirm_transaction(
             7,
             TX_GENESIS.to_string(),
+            Some(65_536),
+            0,
             TX_ZERO.to_string(),
             tx_proof(4242, LEAF_ZERO, &tx_steps(HASH_ONE, false)),
             finality,
@@ -6051,6 +6313,8 @@ mod tests {
         let wrong = confirm_transaction(
             7,
             TX_GENESIS.to_string(),
+            Some(65_536),
+            0,
             TX_ZERO.to_string(),
             tx_proof(4242, LEAF_ZERO, &tx_steps(HASH_ONE, false)),
             tx_finality(TX_HEADER, TX_CERTIFICATE),
@@ -6099,14 +6363,17 @@ mod tests {
         let finality = tx_finality(TX_HEADER, TX_CERTIFICATE);
         let roster = tx_roster(TX_ATTEST_PK);
         let confirm = |chain: u64, tx: &str, proof: String, finality: &str, roster: &str| {
-            confirm_transaction(
+            included(
                 chain,
-                TX_GENESIS.to_string(),
-                tx.to_string(),
-                proof,
-                finality.to_string(),
-                roster.to_string(),
+                TX_GENESIS,
+                Some(65_536),
+                0,
+                tx,
+                &proof,
+                finality,
+                roster,
             )
+            .map(|found| rendered(tx, &found, false))
         };
         let good = tx_proof(4242, LEAF_ZERO, &tx_steps(HASH_ONE, false));
         let confirmed = confirm(7, TX_ZERO, good.clone(), &finality, &roster).expect("confirmed");
@@ -6188,14 +6455,17 @@ mod tests {
         .contains("certificate"));
         assert!(confirm(7, TX_ZERO, good.clone(), &finality, "[]").is_err());
         let with_genesis = |genesis: String| {
-            confirm_transaction(
+            included(
                 7,
-                genesis,
-                TX_ZERO.to_string(),
-                good.clone(),
-                finality.clone(),
-                roster.clone(),
+                &genesis,
+                Some(65_536),
+                0,
+                TX_ZERO,
+                &good,
+                &finality,
+                &roster,
             )
+            .map(|found| rendered(TX_ZERO, &found, false))
         };
         assert!(with_genesis(TX_GENESIS.to_uppercase()).is_ok());
         let other = tx_flip(TX_GENESIS, 0);
@@ -6203,9 +6473,24 @@ mod tests {
             with_genesis(other.clone()).is_err(),
             "a certificate signed for another genesis does not confirm here"
         );
+        assert!(confirm_transaction(
+            7,
+            TX_GENESIS.to_string(),
+            Some(65_536),
+            0,
+            TX_ZERO.to_string(),
+            good.clone(),
+            finality.clone(),
+            roster.clone()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("malformed"));
         assert!(verify_finality(
             7,
             other,
+            Some(65_536),
+            0,
             TX_HEADER.to_string(),
             TX_CERTIFICATE.to_string(),
             roster.clone()
@@ -6224,6 +6509,8 @@ mod tests {
             assert!(verify_finality(
                 7,
                 bad,
+                Some(65_536),
+                0,
                 TX_HEADER.to_string(),
                 TX_CERTIFICATE.to_string(),
                 roster.clone()
