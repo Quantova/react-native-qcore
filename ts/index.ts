@@ -192,17 +192,19 @@ interface QcoreNative {
   mapSlotKey(mapDomainTag: string, keyAddressHex: string): string;
   mapAddrWordKey(mapDomainTag: string, key32Hex: string, word: string): string;
   scalarSlotKey(slot: string): string;
-  vaultCreate(alias: string): string;
-  vaultImportPhrase(alias: string, phraseBase64: string): string;
-  vaultImportSeed(alias: string, seedBase64: string): string;
-  vaultRevealPhrase(alias: string, title: string, subtitle: string): Promise<string>;
+  vaultCreate(alias: string): Promise<string>;
+  vaultImportPhrase(alias: string, phrase: number[]): Promise<string>;
+  vaultImportSeed(alias: string, seed: number[]): Promise<string>;
+  vaultRevealPhrase(alias: string, title: string, subtitle: string): Promise<string | number[]>;
+  vaultLearnAddresses(alias: string, count: string): Promise<string>;
   vaultResetNonceState(alias: string, chainId: string, genesisHex: string, key: string, title: string, subtitle: string): Promise<string>;
   vaultAcknowledgeImportedHistory(alias: string, chainId: string, genesisHex: string, key: string, title: string, subtitle: string): Promise<string>;
+  vaultAcknowledgeMainnet(alias: string, chainId: string, genesisHex: string, key: string, title: string, subtitle: string): Promise<string>;
   vaultStorageLevel(): string;
   vaultHas(alias: string): string;
   vaultClose(alias: string): string;
   vaultCloseAll(): string;
-  vaultForget(alias: string): string;
+  vaultForget(alias: string, title: string, subtitle: string): Promise<string>;
   vaultAddress(alias: string, index: string): string;
   vaultSignTransfer(
     alias: string,
@@ -636,12 +638,14 @@ export interface SettleProgress {
 }
 
 export interface SecureQCore {
-  createSeed(alias: string): void;
-  importPhrase(alias: string, phrase: Uint8Array): void;
-  importSeed(alias: string, seed: Uint8Array): void;
+  createSeed(alias: string): Promise<void>;
+  importPhrase(alias: string, phrase: Uint8Array): Promise<void>;
+  importSeed(alias: string, seed: Uint8Array): Promise<void>;
   revealPhrase(alias: string, prompt?: RevealPrompt): Promise<Uint8Array>;
+  learnAddresses(alias: string, count: bigint): Promise<void>;
   resetNonceState(alias: string, account: NonceAccount | null, prompt?: RevealPrompt): Promise<void>;
   acknowledgeImportedHistory(alias: string, account: NonceAccount, prompt?: RevealPrompt): Promise<void>;
+  acknowledgeMainnet(alias: string, account: NonceAccount, prompt?: RevealPrompt): Promise<void>;
   settleHistory(
     account: NonceAccount,
     headerHex: string,
@@ -652,7 +656,7 @@ export interface SecureQCore {
   hasSeed(alias: string): boolean;
   closeSeed(alias: string): void;
   closeAll(): void;
-  forgetSeed(alias: string): void;
+  forgetSeed(alias: string, prompt?: RevealPrompt): Promise<void>;
   address(alias: string, index: bigint): string;
   signTransfer(
     alias: string,
@@ -732,57 +736,41 @@ const STORAGE_LEVELS = ['strongbox', 'trusted-environment', 'secure-hardware', '
 
 export type StorageLevel = (typeof STORAGE_LEVELS)[number];
 
-const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-
-function sextet(code: number): number {
-  if (code >= 65 && code <= 90) return code - 65;
-  if (code >= 97 && code <= 122) return code - 71;
-  if (code >= 48 && code <= 57) return code + 4;
-  if (code === 43) return 62;
-  if (code === 47) return 63;
-  return -1;
-}
-
 function plainBytes(value: unknown, what: string): Uint8Array {
   if (!(ArrayBuffer.isView(value) && value instanceof Uint8Array)) throw new Error(what + ' must be a Uint8Array');
   return value;
 }
 
-function toBase64(input: Uint8Array, what: string): string {
-  const bytes = plainBytes(input, what);
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 3) {
-    const left = bytes.length - i;
-    const triple = ((bytes[i] ?? 0) << 16) | ((left > 1 ? (bytes[i + 1] ?? 0) : 0) << 8) | (left > 2 ? (bytes[i + 2] ?? 0) : 0);
-    out += BASE64_ALPHABET.charAt((triple >> 18) & 63);
-    out += BASE64_ALPHABET.charAt((triple >> 12) & 63);
-    out += left > 1 ? BASE64_ALPHABET.charAt((triple >> 6) & 63) : '=';
-    out += left > 2 ? BASE64_ALPHABET.charAt(triple & 63) : '=';
+function byteList(input: Uint8Array, what: string): number[] {
+  return Array.from(plainBytes(input, what));
+}
+
+function fromByteList(list: unknown): Uint8Array {
+  if (!Array.isArray(list)) throw new Error('the native layer returned no phrase');
+  const out = new Uint8Array(list.length);
+  for (let i = 0; i < list.length; i += 1) {
+    const value = list[i];
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 255) {
+      out.fill(0);
+      list.fill(0);
+      throw new Error('the native layer returned a malformed phrase');
+    }
+    out[i] = value;
   }
+  list.fill(0);
   return out;
 }
 
-function fromBase64(text: string): Uint8Array {
-  if (text.length % 4 !== 0) throw new Error('the native layer returned malformed base64');
-  const padding = text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0;
-  const out = new Uint8Array((text.length / 4) * 3 - padding);
-  let at = 0;
-  for (let i = 0; i < text.length; i += 4) {
-    let triple = 0;
-    for (let j = 0; j < 4; j += 1) {
-      const code = text.charCodeAt(i + j);
-      const value = code === 61 && i + j >= text.length - padding ? 0 : sextet(code);
-      if (value < 0) {
-        out.fill(0);
-        throw new Error('the native layer returned malformed base64');
-      }
-      triple = (triple << 6) | value;
-    }
-    if (at < out.length) out[at++] = (triple >> 16) & 255;
-    if (at < out.length) out[at++] = (triple >> 8) & 255;
-    if (at < out.length) out[at++] = triple & 255;
-  }
-  return out;
+async function settled(call: Promise<unknown>): Promise<void> {
+  const text = await call;
+  if (typeof text !== 'string') throw new Error('the native layer returned no answer');
+  if (text.startsWith(FAILURE_PREFIX)) throw nativeError(text.slice(FAILURE_PREFIX.length));
+}
+
+function account(given: NonceAccount, what: string): [string, string, string] {
+  if (given === null || typeof given !== 'object') throw new Error(what);
+  if (typeof given.key !== 'string' || given.key.length === 0) throw new Error('a nonce account names a key');
+  return [u64(given.chainId), genesis(given.genesisHash), given.key];
 }
 
 export function wipeBytes(bytes: Uint8Array): void {
@@ -790,20 +778,35 @@ export function wipeBytes(bytes: Uint8Array): void {
 }
 
 export const secureQCore: SecureQCore = {
-  createSeed(alias: string): void {
-    native.vaultCreate(alias);
+  async createSeed(alias: string): Promise<void> {
+    await settled(native.vaultCreate(alias));
   },
-  importPhrase(alias: string, phrase: Uint8Array): void {
-    native.vaultImportPhrase(alias, toBase64(phrase, 'the recovery phrase'));
+  async importPhrase(alias: string, phrase: Uint8Array): Promise<void> {
+    const list = byteList(phrase, 'the recovery phrase');
+    try {
+      await settled(native.vaultImportPhrase(alias, list));
+    } finally {
+      list.fill(0);
+    }
   },
-  importSeed(alias: string, seed: Uint8Array): void {
-    native.vaultImportSeed(alias, toBase64(seed, 'the seed'));
+  async importSeed(alias: string, seed: Uint8Array): Promise<void> {
+    const list = byteList(seed, 'the seed');
+    try {
+      await settled(native.vaultImportSeed(alias, list));
+    } finally {
+      list.fill(0);
+    }
   },
   async revealPhrase(alias: string, prompt: RevealPrompt = {}): Promise<Uint8Array> {
-    const text = await native.vaultRevealPhrase(alias, prompt.title ?? '', prompt.subtitle ?? '');
-    if (typeof text !== 'string') throw new Error('the native layer returned no phrase');
-    if (text.startsWith(FAILURE_PREFIX)) throw nativeError(text.slice(FAILURE_PREFIX.length));
-    return fromBase64(text);
+    const answer = await native.vaultRevealPhrase(alias, prompt.title ?? '', prompt.subtitle ?? '');
+    if (typeof answer === 'string') {
+      if (answer.startsWith(FAILURE_PREFIX)) throw nativeError(answer.slice(FAILURE_PREFIX.length));
+      throw new Error('the native layer returned no phrase');
+    }
+    return fromByteList(answer);
+  },
+  async learnAddresses(alias: string, count: bigint): Promise<void> {
+    await settled(native.vaultLearnAddresses(alias, u64(count)));
   },
   async resetNonceState(alias: string, account: NonceAccount | null, prompt: RevealPrompt = {}): Promise<void> {
     const chainId = account === null ? '' : u64(account.chainId);
@@ -814,15 +817,13 @@ export const secureQCore: SecureQCore = {
     if (typeof text !== 'string') throw new Error('the native layer returned no answer');
     if (text.startsWith(FAILURE_PREFIX)) throw nativeError(text.slice(FAILURE_PREFIX.length));
   },
-  async acknowledgeImportedHistory(alias: string, account: NonceAccount, prompt: RevealPrompt = {}): Promise<void> {
-    if (account === null || typeof account !== 'object') throw new Error('name the account whose imported history is acknowledged');
-    const chainId = u64(account.chainId);
-    const pinned = genesis(account.genesisHash);
-    const key = account.key;
-    if (typeof key !== 'string' || key.length === 0) throw new Error('a nonce account names a key');
-    const text = await native.vaultAcknowledgeImportedHistory(alias, chainId, pinned, key, prompt.title ?? '', prompt.subtitle ?? '');
-    if (typeof text !== 'string') throw new Error('the native layer returned no answer');
-    if (text.startsWith(FAILURE_PREFIX)) throw nativeError(text.slice(FAILURE_PREFIX.length));
+  async acknowledgeImportedHistory(alias: string, given: NonceAccount, prompt: RevealPrompt = {}): Promise<void> {
+    const [chainId, pinned, key] = account(given, 'name the account whose imported history is acknowledged');
+    await settled(native.vaultAcknowledgeImportedHistory(alias, chainId, pinned, key, prompt.title ?? '', prompt.subtitle ?? ''));
+  },
+  async acknowledgeMainnet(alias: string, given: NonceAccount, prompt: RevealPrompt = {}): Promise<void> {
+    const [chainId, pinned, key] = account(given, 'name the mainnet account to acknowledge');
+    await settled(native.vaultAcknowledgeMainnet(alias, chainId, pinned, key, prompt.title ?? '', prompt.subtitle ?? ''));
   },
   async settleHistory(
     account: NonceAccount,
@@ -858,8 +859,8 @@ export const secureQCore: SecureQCore = {
   closeAll(): void {
     native.vaultCloseAll();
   },
-  forgetSeed(alias: string): void {
-    native.vaultForget(alias);
+  async forgetSeed(alias: string, prompt: RevealPrompt = {}): Promise<void> {
+    await settled(native.vaultForget(alias, prompt.title ?? '', prompt.subtitle ?? ''));
   },
   address(alias: string, index: bigint): string {
     return native.vaultAddress(alias, u64(index));
@@ -1266,4 +1267,4 @@ export function registerQCore(setQCore: (instance: QCore) => void): void {
   setQCore(nativeQCore);
 }
 
-export default nativeQCore;
+export default secureQCore;
