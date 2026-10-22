@@ -1236,6 +1236,13 @@ impl Nonces {
                 ));
             }
         }
+        if expected.is_none() {
+            if let Some(local) = self.next.filter(|local| reported < *local) {
+                return Err(format!(
+                    "the gateway reports nonce {reported} below the {local} this session already reached, a transaction signed here may still land at that nonce, so a second one is not signed there, pass the expected nonce to sign at {reported} on purpose"
+                ));
+            }
+        }
         self.held
             .retain(|slot, accepted| !(*accepted && *slot < reported));
         if expected.is_some() {
