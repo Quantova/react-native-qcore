@@ -324,8 +324,8 @@ dependencies = [
 
 [[package]]
 name = "qcore"
-version = "0.11.0"
-source = "git+https://github.com/Quantova/QCore.rs.git?rev=0e8851e340209e2cb7e89b014c07fe196123a97c#0e8851e340209e2cb7e89b014c07fe196123a97c"
+version = "0.11.1"
+source = "git+https://github.com/Quantova/QCore.rs.git?rev=a1fb693fbbe1055f919cc33885b59b464ec8b4e2#a1fb693fbbe1055f919cc33885b59b464ec8b4e2"
 dependencies = [
  "qtv-account",
  "qtv-attest",
@@ -453,7 +453,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "react-native-qcore"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "qcore",
  "thiserror",
