@@ -1,0 +1,353 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+package com.quantova.qcore
+
+import android.app.Activity
+import android.app.KeyguardManager
+import android.content.Context
+import android.content.Intent
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
+import android.os.Build
+import android.os.CancellationSignal
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.security.keystore.KeyProperties
+import android.security.keystore.StrongBoxUnavailableException
+import androidx.annotation.RequiresApi
+import com.facebook.react.bridge.BaseActivityEventListener
+import com.facebook.react.bridge.ReactContext
+import java.security.KeyStore
+import java.security.ProviderException
+import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+
+internal enum class Gate(val title: String, val cancelled: String, val unsupported: String) {
+    REVEAL("Reveal recovery phrase", "authentication cancelled, the phrase was not revealed", "revealing the phrase needs a device lock"),
+    RESET("Reset nonce state", "authentication cancelled, the nonce state was not reset", "resetting the nonce state needs a device lock"),
+    ACKNOWLEDGE("Acknowledge imported history", "authentication cancelled, the imported history was not acknowledged", "acknowledging imported history needs a device lock"),
+    MAINNET("Allow mainnet signing", "authentication cancelled, mainnet was not acknowledged", "acknowledging mainnet needs a device lock"),
+    FORGET("Delete wallet from this device", "authentication cancelled, the seed was not deleted", "deleting a seed needs a device lock"),
+    PROTECT("Store wallet on this device", "authentication cancelled, the seed was not stored", "storing a seed needs a device lock"),
+    ADDRESSES("Show wallet addresses", "authentication cancelled, no address was derived", "deriving addresses needs a device lock"),
+    SIGN("Approve transaction", "authentication cancelled, nothing was signed", "signing needs a device lock"),
+}
+
+internal enum class GatePath { PROMPT, CONFIRM }
+
+internal fun gatePath(sdk: Int, biometricEnrolled: Boolean): GatePath = when {
+    sdk >= Build.VERSION_CODES.R -> GatePath.PROMPT
+    sdk >= Build.VERSION_CODES.P && biometricEnrolled -> GatePath.PROMPT
+    else -> GatePath.CONFIRM
+}
+
+internal fun gateText(primary: String, secondary: String): String =
+    listOf(primary, secondary).filter { it.isNotEmpty() }.joinToString("\n")
+
+internal class RevealGate(private val context: ReactContext) {
+
+    private class Pending(val code: Int, val since: Long, val listener: BaseActivityEventListener, val abandon: () -> Unit)
+
+    private val pending = AtomicReference<Pending?>(null)
+
+    private val nextCode = AtomicInteger(SecureRandom().nextInt(CODE_SPAN))
+
+    fun path(activity: Activity): GatePath {
+        val sdk = Build.VERSION.SDK_INT
+        if (sdk >= Build.VERSION_CODES.R || sdk < Build.VERSION_CODES.P) return gatePath(sdk, false)
+        return gatePath(sdk, biometricEnrolled(activity))
+    }
+
+    @Suppress("DEPRECATION")
+    private fun biometricEnrolled(activity: Activity): Boolean =
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                activity.getSystemService(BiometricManager::class.java)?.canAuthenticate() == BiometricManager.BIOMETRIC_SUCCESS
+            } else {
+                key()
+                true
+            }
+        } catch (error: Throwable) {
+            false
+        }
+
+    fun authorize(
+        activity: Activity,
+        gate: Gate,
+        summary: String,
+        extra: String,
+        done: (Throwable?) -> Unit,
+    ) {
+        val settled = AtomicBoolean(false)
+        val finish = { outcome: Throwable? -> if (settled.compareAndSet(false, true)) done(outcome) }
+        if (path(activity) == GatePath.CONFIRM) {
+            confirm(activity, gate, summary, extra, finish)
+            return
+        }
+        val cipher = try {
+            challenge()
+        } catch (error: Throwable) {
+            finish(error)
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                prompt(activity, cipher, gate, summary, extra, finish) { used -> proof(cipher, used) }
+            } catch (error: Throwable) {
+                finish(error)
+            }
+        }
+    }
+
+    fun unlock(
+        activity: Activity,
+        cipher: Cipher,
+        gate: Gate,
+        summary: String,
+        extra: String,
+        done: (Throwable?) -> Unit,
+    ) {
+        val settled = AtomicBoolean(false)
+        val finish = { outcome: Throwable? -> if (settled.compareAndSet(false, true)) done(outcome) }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            finish(SeedStoreException(gate.unsupported))
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                prompt(activity, cipher, gate, summary, extra, finish) { used ->
+                    if (used === cipher) null else SeedStoreException(SeedStore.AUTHENTICATION_REQUIRED)
+                }
+            } catch (error: Throwable) {
+                finish(error)
+            }
+        }
+    }
+
+    private fun confirm(
+        activity: Activity,
+        gate: Gate,
+        summary: String,
+        extra: String,
+        finish: (Throwable?) -> Unit,
+    ) {
+        val keyguard = activity.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        if (keyguard == null || !keyguard.isDeviceSecure) {
+            finish(SeedStoreException(gate.unsupported))
+            return
+        }
+        try {
+            recentKey()
+        } catch (error: Throwable) {
+            finish(SeedStoreException(SeedStore.AUTHENTICATION_REQUIRED))
+            return
+        }
+        @Suppress("DEPRECATION")
+        val intent = keyguard.createConfirmDeviceCredentialIntent(gate.title, gateText(summary, extra).ifEmpty { null })
+        if (intent == null) {
+            finish(SeedStoreException(gate.unsupported))
+            return
+        }
+        val code = CODE_BASE + Math.floorMod(nextCode.getAndIncrement(), CODE_SPAN)
+        val holder = AtomicReference<Pending?>(null)
+        val listener = object : BaseActivityEventListener() {
+            override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
+                if (requestCode != code) return
+                context.removeActivityEventListener(this)
+                val mine = holder.get() ?: return
+                if (!pending.compareAndSet(mine, null)) return
+                finish(if (resultCode == Activity.RESULT_OK) recentProof() else SeedStoreException(gate.cancelled))
+            }
+        }
+        val mine = Pending(code, System.nanoTime(), listener) { finish(SeedStoreException(gate.cancelled)) }
+        holder.set(mine)
+        while (true) {
+            val current = pending.get()
+            if (current != null && System.nanoTime() - current.since < STALE_NANOS) {
+                finish(SeedStoreException(GATE_BUSY))
+                return
+            }
+            if (pending.compareAndSet(current, mine)) {
+                if (current != null) {
+                    context.removeActivityEventListener(current.listener)
+                    current.abandon()
+                }
+                break
+            }
+        }
+        context.addActivityEventListener(listener)
+        activity.runOnUiThread {
+            try {
+                activity.startActivityForResult(intent, code)
+            } catch (error: Throwable) {
+                context.removeActivityEventListener(listener)
+                if (pending.compareAndSet(mine, null)) finish(SeedStoreException(gate.unsupported))
+            }
+        }
+    }
+
+    private fun recentProof(): Throwable? =
+        try {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, recentKey())
+            cipher.doFinal(ByteArray(CHALLENGE_BYTES))
+            null
+        } catch (error: Throwable) {
+            SeedStoreException(SeedStore.AUTHENTICATION_REQUIRED)
+        }
+
+    private fun recentKey(): SecretKey = synchronized(KeyLock) {
+        val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+        val found = keyStore.getKey(RECENT_ALIAS, null) as? SecretKey
+        if (found != null) {
+            try {
+                Cipher.getInstance(TRANSFORMATION).init(Cipher.ENCRYPT_MODE, found)
+                return@synchronized found
+            } catch (error: KeyPermanentlyInvalidatedException) {
+                keyStore.deleteEntry(RECENT_ALIAS)
+            } catch (error: Throwable) {
+                return@synchronized found
+            }
+        }
+        val builder = KeyGenParameterSpec.Builder(
+            RECENT_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(KEY_BITS)
+            .setRandomizedEncryptionRequired(true)
+            .setUserAuthenticationRequired(true)
+        @Suppress("DEPRECATION")
+        builder.setUserAuthenticationValidityDurationSeconds(RECENT_SECONDS)
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
+        generator.init(builder.build())
+        generator.generateKey()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun prompt(
+        activity: Activity,
+        cipher: Cipher,
+        gate: Gate,
+        summary: String,
+        extra: String,
+        finish: (Throwable?) -> Unit,
+        check: (Cipher?) -> Throwable?,
+    ) {
+        val executor = activity.mainExecutor
+        val builder = BiometricPrompt.Builder(activity).setTitle(gate.title)
+        val detail = gateText(summary, extra)
+        if (detail.isNotEmpty()) builder.setDescription(detail)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+        } else {
+            builder.setNegativeButton(CANCEL_LABEL, executor) { _, _ ->
+                finish(SeedStoreException(gate.cancelled))
+            }
+        }
+        val callback = object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                finish(check(result.cryptoObject?.cipher))
+            }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                val byUser = errorCode == BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED ||
+                    errorCode == BiometricPrompt.BIOMETRIC_ERROR_CANCELED
+                finish(SeedStoreException(if (byUser) gate.cancelled else SeedStore.AUTHENTICATION_REQUIRED))
+            }
+        }
+        builder.build().authenticate(BiometricPrompt.CryptoObject(cipher), CancellationSignal(), executor, callback)
+    }
+
+    private fun proof(expected: Cipher, used: Cipher?): Throwable? =
+        try {
+            if (used == null || used !== expected) throw SeedStoreException(SeedStore.AUTHENTICATION_REQUIRED)
+            used.doFinal(ByteArray(CHALLENGE_BYTES))
+            null
+        } catch (error: SeedStoreException) {
+            error
+        } catch (error: Throwable) {
+            SeedStoreException(SeedStore.AUTHENTICATION_REQUIRED)
+        }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun challenge(): Cipher {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        try {
+            cipher.init(Cipher.ENCRYPT_MODE, key())
+        } catch (error: KeyPermanentlyInvalidatedException) {
+            discard()
+            cipher.init(Cipher.ENCRYPT_MODE, key())
+        }
+        return cipher
+    }
+
+    private fun discard() = synchronized(KeyLock) {
+        KeyStore.getInstance(KEYSTORE).apply { load(null) }.deleteEntry(KEY_ALIAS)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun key(): SecretKey = synchronized(KeyLock) {
+        val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey) ?: run {
+            try {
+                generate(strongBox = true)
+            } catch (error: ProviderException) {
+                if (error !is StrongBoxUnavailableException) throw error
+                generate(strongBox = false)
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun generate(strongBox: Boolean): SecretKey {
+        val builder = KeyGenParameterSpec.Builder(
+            KEY_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(KEY_BITS)
+            .setRandomizedEncryptionRequired(true)
+            .setUserAuthenticationRequired(true)
+            .setInvalidatedByBiometricEnrollment(true)
+            .setUnlockedDeviceRequired(true)
+            .setIsStrongBoxBacked(strongBox)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            builder.setUserAuthenticationParameters(
+                0,
+                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            builder.setUserAuthenticationValidityDurationSeconds(-1)
+        }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
+        generator.init(builder.build())
+        return generator.generateKey()
+    }
+
+    private object KeyLock
+
+    companion object {
+        private const val CANCEL_LABEL = "Cancel"
+        private const val KEYSTORE = "AndroidKeyStore"
+        private const val KEY_ALIAS = "com.quantova.qcore.reveal.key.1"
+        private const val RECENT_ALIAS = "com.quantova.qcore.reveal.recent.1"
+        private const val RECENT_SECONDS = 5
+        private const val CODE_BASE = 0x5100
+        private const val CODE_SPAN = 0x0400
+        private const val STALE_NANOS = 120_000_000_000L
+        const val GATE_BUSY = "another authentication is already waiting for the user, finish or cancel it first"
+        private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val KEY_BITS = 256
+        private const val CHALLENGE_BYTES = 32
+    }
+}

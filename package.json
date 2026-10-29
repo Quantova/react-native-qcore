@@ -1,0 +1,68 @@
+{
+  "name": "@quantovainc/react-native-qcore",
+  "version": "0.6.12",
+  "description": "Quantova's post quantum client core for React Native. Derives Q1 keys and signs with ML-DSA-65 on device over the Rust core QCore, no wasm. The vault signs only at a nonce slot taken from a signing session whose state is kept encrypted on the device, and the seed functions that take a raw nonce are low level.",
+  "main": "ts/index.ts",
+  "module": "ts/index.ts",
+  "react-native": "ts/index.ts",
+  "source": "ts/index.ts",
+  "types": "ts/index.ts",
+  "scripts": {
+    "bindgen": "bash scripts/generate-bindings.sh",
+    "build:android": "bash scripts/build-android.sh",
+    "build:ios": "bash scripts/build-ios.sh",
+    "build:ts": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "cargo test --all-features --locked",
+    "verify:binaries": "bash scripts/verify-binaries.sh",
+    "prepublishOnly": "bash scripts/verify-binaries.sh --publish"
+  },
+  "keywords": [
+    "post-quantum",
+    "quantum-resistant",
+    "quantum-safe",
+    "react-native",
+    "blockchain",
+    "wallet",
+    "cryptography",
+    "ml-dsa",
+    "quantova",
+    "uniffi"
+  ],
+  "license": "(Apache-2.0 OR MIT)",
+  "author": "Quantova Inc",
+  "homepage": "https://github.com/Quantova/react-native-qcore#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Quantova/react-native-qcore.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Quantova/react-native-qcore/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": ">=0.74.0"
+  },
+  "files": [
+    "ts",
+    "android/build.gradle",
+    "android/consumer-rules.pro",
+    "android/src",
+    "ios/Qcore.swift",
+    "ios/Qcore.mm",
+    "ios/generated",
+    "ios/QuantovaQcore.xcframework",
+    "SHA256SUMS",
+    "react-native-qcore.podspec",
+    "Cargo.toml",
+    "src",
+    "scripts",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "NOTICE",
+    "AUTHORS"
+  ]
+}

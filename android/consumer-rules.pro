@@ -1,0 +1,6 @@
+-dontwarn java.awt.**
+-keep class com.sun.jna.** { *; }
+-keepclassmembers class * extends com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+-keep class uniffi.quantova_qcore.** { *; }
+-keep class com.quantova.qcore.** { *; }
