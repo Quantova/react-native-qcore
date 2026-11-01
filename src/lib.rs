@@ -3438,7 +3438,7 @@ mod tests {
     fn the_core_signs_for_the_testnet_with_its_pinned_genesis_and_clock() {
         assert_eq!(
             testnet_genesis_hash().as_deref(),
-            Some("de409ca7204b36f68f4a8a32e8476df0ee079919600af499c0c8dd3cc69161ad")
+            Some("3eac5e481f289a8fefa5360f0347418fe389eab85309a06078806898c0249c7a")
         );
         assert_eq!(
             chain_id_from_name("Q-TestNet-1".to_string()).unwrap(),
