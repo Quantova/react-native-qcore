@@ -1057,7 +1057,7 @@ fn call_lines(args_hex: &str, meter: &str) -> Result<String, QcoreError> {
         format!(
             "Arguments {} bytes, fingerprint {}",
             body.len(),
-            hex(&digest[..8])
+            hex(&digest)
         )
     };
     Ok(format!(
