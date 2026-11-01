@@ -325,7 +325,7 @@ dependencies = [
 [[package]]
 name = "qcore"
 version = "0.11.5"
-source = "git+https://github.com/Quantova/QCore.rs.git?rev=658a67d728f81bc83321a34671a53042cd67a642#658a67d728f81bc83321a34671a53042cd67a642"
+source = "git+https://github.com/Quantova/QCore.rs.git?rev=409b9556481efb6f7af2455a1f63669465db4982#409b9556481efb6f7af2455a1f63669465db4982"
 dependencies = [
  "qtv-account",
  "qtv-attest",
@@ -426,7 +426,7 @@ dependencies = [
 [[package]]
 name = "qtv-vm"
 version = "0.2.0"
-source = "git+https://github.com/Quantova/QVM.git?rev=5f151412a94d1e2085ded84836a2225089637960#5f151412a94d1e2085ded84836a2225089637960"
+source = "git+https://github.com/Quantova/QVM.git?rev=9fe68bf56ff48ff2fa84351b24097c751e5d27e3#9fe68bf56ff48ff2fa84351b24097c751e5d27e3"
 dependencies = [
  "qtv-crypto",
 ]
