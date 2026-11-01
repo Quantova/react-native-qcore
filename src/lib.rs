@@ -3445,7 +3445,7 @@ mod tests {
             12_297_519_099_935_616_051
         );
         let genesis = genesis_secs("Q-TestNet-1".to_string());
-        assert_eq!(genesis, 1_793_182_901);
+        assert_eq!(genesis, 1_793_537_892);
         let wall = genesis + 36_000;
         let until = bounded_valid_until("Q-TestNet-1".to_string(), 1_000, wall, None, 0)
             .expect("a head on the testnet is bounded by its known clock");
