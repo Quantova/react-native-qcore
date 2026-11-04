@@ -1394,7 +1394,7 @@ const BOOT_MAX: usize = 64;
 
 const SETTLE_BLOCKS: u64 = qcore::MAX_VALIDITY_BLOCKS;
 
-const CHAIN_BLOCKS_PER_SEC: u64 = 5;
+const CHAIN_BLOCKS_PER_SEC: u64 = 10;
 
 const SETTLE_START_AGE_SECS: u64 = 300;
 

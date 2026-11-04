@@ -325,7 +325,7 @@ dependencies = [
 [[package]]
 name = "qcore"
 version = "0.11.5"
-source = "git+https://github.com/Quantova/QCore.rs.git?rev=ca633e3342bcf0c8f6e83b64f5a35a38eb6bb961#ca633e3342bcf0c8f6e83b64f5a35a38eb6bb961"
+source = "git+https://github.com/Quantova/QCore.rs.git?rev=6c1f92f14ff8a48d3740fd6b3f68926a68002261#6c1f92f14ff8a48d3740fd6b3f68926a68002261"
 dependencies = [
  "qtv-account",
  "qtv-attest",
