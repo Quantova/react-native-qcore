@@ -3420,8 +3420,8 @@ mod tests {
 
     #[test]
     fn the_retired_testnet_host_is_refused_and_the_served_one_accepted() {
-        assert_eq!(testnet_rpc_url(), "https://q-testnet-1.quantova.org");
-        assert_eq!(testnet_chain_name(), "Q-TestNet-1");
+        assert_eq!(testnet_rpc_url(), "https://q-testnet-1-1.quantova.org");
+        assert_eq!(testnet_chain_name(), "Q-testNet-1.1");
         assert!(check_endpoint(testnet_rpc_url()).is_ok());
         for retired in [
             "https://rpc-testnet.quantova.org",
@@ -3438,16 +3438,16 @@ mod tests {
     fn the_core_signs_for_the_testnet_with_its_pinned_genesis_and_clock() {
         assert_eq!(
             testnet_genesis_hash().as_deref(),
-            Some("388d535bc7df2117d0e06d07f26eb1b6e5869f369ef37c457862d60648458c29")
+            Some("eb6a54c9d4daf6a8609c0fd9c25e339a59cb269646fbf53679efa58a0d15c7c8")
         );
         assert_eq!(
-            chain_id_from_name("Q-TestNet-1".to_string()).unwrap(),
-            12_297_519_099_935_616_051
+            chain_id_from_name("Q-testNet-1.1".to_string()).unwrap(),
+            49_882_562_325_403_262
         );
-        let genesis = genesis_secs("Q-TestNet-1".to_string());
-        assert_eq!(genesis, 1_793_537_892);
+        let genesis = genesis_secs("Q-testNet-1.1".to_string());
+        assert_eq!(genesis, 1_793_761_285);
         let wall = genesis + 36_000;
-        let until = bounded_valid_until("Q-TestNet-1".to_string(), 1_000, wall, None, 0)
+        let until = bounded_valid_until("Q-testNet-1.1".to_string(), 1_000, wall, None, 0)
             .expect("a head on the testnet is bounded by its known clock");
         assert!(until > 1_000);
     }
@@ -6121,9 +6121,9 @@ mod tests {
     fn the_retired_testnet_name_derives_no_chain_id() {
         assert_eq!(
             chain_id_from_name(qcore::TESTNET_CHAIN_NAME.to_string()).expect("derives"),
-            12_297_519_099_935_616_051
+            49_882_562_325_403_262
         );
-        assert_eq!(qcore::TESTNET_CHAIN_NAME, "Q-TestNet-1");
+        assert_eq!(qcore::TESTNET_CHAIN_NAME, "Q-testNet-1.1");
         let refused = chain_id_from_name("Q-test-net-1".to_string())
             .unwrap_err()
             .to_string();

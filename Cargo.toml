@@ -22,7 +22,7 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
 
 [dependencies]
-qcore = { git = "https://github.com/Quantova/QCore.rs.git", rev = "db405ab8f399b1d19c364d5fef12a81fbe66e2a1", default-features = false }
+qcore = { git = "https://github.com/Quantova/QCore.rs.git", rev = "ca633e3342bcf0c8f6e83b64f5a35a38eb6bb961", default-features = false }
 qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "38f41dede65ed1918e89402c61b711defe16ae26" }
 uniffi = { version = "0.29" }
 zeroize = "1"
